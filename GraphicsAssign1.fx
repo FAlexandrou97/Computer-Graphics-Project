@@ -39,6 +39,8 @@ float4x4 ProjMatrix;
 
 // A single colour for an entire model - used for light models and the intial basic shader
 float3 ModelColour;
+// Variable used for the wiggle effect
+float Wiggle;
 
 // Diffuse texture map (the main texture colour) - may contain specular map in alpha channel
 Texture2D DiffuseMap;
@@ -97,6 +99,21 @@ float4 TintDiffuseMap(VS_BASIC_OUTPUT vOut) : SV_Target
 	return diffuseMapColour;
 }
 
+// ADDED
+float3 WigglePixelShader(VS_BASIC_OUTPUT vOut) : SV_Target  // The ": SV_Target" bit just indicates that the returned float4 colour goes to the render target (i.e. it's a colour to render)
+{
+	float SinY = sin(vOut.UV.y * radians(360.0f) + Wiggle);
+	float SinX = sin(vOut.UV.x * radians(360.0f) + Wiggle);
+	vOut.UV.x += 0.1f * SinY;
+	vOut.UV.y += 0.1f * SinX;
+
+	float4 colour;
+	float3 TexColour = DiffuseMap.Sample(TrilinearWrap, vOut.UV);
+	colour.rgb = TexColour;
+	
+	return TexColour;
+}
+
 
 //--------------------------------------------------------------------------------------
 // Techniques
@@ -123,5 +140,16 @@ technique10 TintDiffuse
 		SetVertexShader(CompileShader(vs_4_0, BasicTransform()));
 		SetGeometryShader(NULL);
 		SetPixelShader(CompileShader(ps_4_0, TintDiffuseMap()));
+	}
+}
+
+// ADDED
+technique10 WiggleTechnique
+{
+	pass P0
+	{
+		SetVertexShader(CompileShader(vs_4_0, BasicTransform()));
+		SetGeometryShader(NULL);
+		SetPixelShader(CompileShader(ps_4_0, WigglePixelShader()));
 	}
 }

@@ -78,12 +78,14 @@ const float LightOrbitSpeed  = 0.5f;
 ID3D10Effect*          Effect = NULL;
 ID3D10EffectTechnique* PlainColourTechnique = NULL;
 ID3D10EffectTechnique* TintDiffuse = NULL;
+ID3D10EffectTechnique* WiggleTechnique = NULL;
 
 // Matrices
 ID3D10EffectMatrixVariable* WorldMatrixVar = NULL;
 ID3D10EffectMatrixVariable* ViewMatrixVar = NULL;
 ID3D10EffectMatrixVariable* ProjMatrixVar = NULL;
 ID3D10EffectMatrixVariable* ViewProjMatrixVar = NULL;
+ID3D10EffectScalarVariable* g_pCubeWiggleVar = NULL;
 
 // Textures
 ID3D10EffectShaderResourceVariable* DiffuseMapVar = NULL;
@@ -91,6 +93,7 @@ ID3D10EffectShaderResourceVariable* DiffuseMapVar = NULL;
 // Miscellaneous
 ID3D10EffectVectorVariable* ModelColourVar = NULL;
 
+float g_WiggleVar;
 
 //--------------------------------------------------------------------------------------
 // DirectX Variables
@@ -253,6 +256,7 @@ bool LoadEffectFile()
 	// Now we can select techniques from the compiled effect file
 	PlainColourTechnique = Effect->GetTechniqueByName("PlainColour");
 	TintDiffuse = Effect->GetTechniqueByName("TintDiffuse");
+	WiggleTechnique = Effect->GetTechniqueByName("WiggleTechnique");
 
 	// Create special variables to allow us to access global variables in the shaders from C++
 	WorldMatrixVar    = Effect->GetVariableByName( "WorldMatrix" )->AsMatrix();
@@ -265,6 +269,7 @@ bool LoadEffectFile()
 
 	// Other shader variables
 	ModelColourVar = Effect->GetVariableByName( "ModelColour"  )->AsVector();
+	g_pCubeWiggleVar = Effect->GetVariableByName("Wiggle")->AsScalar();
 
 	return true;
 }
@@ -333,6 +338,10 @@ void UpdateScene( float frameTime )
 	Cube->Control( frameTime, Key_I, Key_K, Key_J, Key_L, Key_U, Key_O, Key_Period, Key_Comma );
 	Cube->UpdateMatrix();
 
+	// Wiggle effect
+	g_WiggleVar += 6 * frameTime;
+	g_pCubeWiggleVar->SetFloat(g_WiggleVar);
+
 	// Update the orbiting light - a bit of a cheat with the static variable [ask the tutor if you want to know what this is]
 	static float Rotate = 0.0f;
 	Light1->SetPosition( Cube->GetPosition() + D3DXVECTOR3(cos(Rotate)*LightOrbitRadius, 0, sin(Rotate)*LightOrbitRadius) );
@@ -373,8 +382,7 @@ void RenderScene()
 	// Render cube
 	WorldMatrixVar->SetMatrix( (float*)Cube->GetWorldMatrix() );  // Send the cube's world matrix to the shader
     DiffuseMapVar->SetResource( CubeDiffuseMap );                 // Send the cube's diffuse/specular map to the shader
-	ModelColourVar->SetRawValue( Blue, 0, 12 );           // Set a single colour to render the model
-	Cube->Render( PlainColourTechnique );                         // Pass rendering technique to the model class
+	Cube->Render( WiggleTechnique );                         // Pass rendering technique to the model class
 
 	// Same for the other models in the scene
 	WorldMatrixVar->SetMatrix( (float*)Floor->GetWorldMatrix() );
