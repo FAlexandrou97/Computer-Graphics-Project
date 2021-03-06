@@ -52,6 +52,7 @@ CCamera* Camera;
 // Textures - no texture class yet so using DirectX variables
 ID3D10ShaderResourceView* CubeDiffuseMap = NULL;
 ID3D10ShaderResourceView* FloorDiffuseMap = NULL;
+ID3D10ShaderResourceView* StoneDiffuseMap = NULL;
 
 // Light data - stored manually as there is no light class
 D3DXVECTOR3 Light1Colour = D3DXVECTOR3( 1.0f, 0.0f, 0.7f );
@@ -65,6 +66,8 @@ CModel* Light2;
 const float LightOrbitRadius = 20.0f;
 const float LightOrbitSpeed  = 0.5f;
 
+
+CModel* Teapot;
 // Note: There are move & rotation speed constants in Defines.h
 
 
@@ -218,9 +221,11 @@ void ReleaseResources()
 	delete Floor;
 	delete Cube;
 	delete Camera;
+	delete Teapot;
 
     if( FloorDiffuseMap )  FloorDiffuseMap->Release();
     if( CubeDiffuseMap )   CubeDiffuseMap->Release();
+    if( StoneDiffuseMap )  StoneDiffuseMap->Release();
 	if( Effect )           Effect->Release();
 	if( DepthStencilView ) DepthStencilView->Release();
 	if( RenderTargetView ) RenderTargetView->Release();
@@ -298,6 +303,7 @@ bool InitScene()
 	Floor = new CModel;
 	Light1 = new CModel;
 	Light2 = new CModel;
+	Teapot = new CModel;
 
 	// The model class can load ".X" files. It encapsulates (i.e. hides away from this code) the file loading/parsing and creation of vertex/index buffers
 	// We must pass an example technique used for each model. We can then only render models with techniques that uses matching vertex input data
@@ -305,6 +311,7 @@ bool InitScene()
 	if (!Floor-> Load( "Floor.x", PlainColourTechnique )) return false;
 	if (!Light1->Load( "Sphere.x", PlainColourTechnique )) return false;
 	if (!Light2->Load( "Sphere.x", PlainColourTechnique )) return false;
+	if (!Teapot->Load( "Teapot.x", PlainColourTechnique )) return false;
 
 	// Initial positions
 	Cube->SetPosition( D3DXVECTOR3(0, 10, 0) );
@@ -313,13 +320,16 @@ bool InitScene()
 	Light2->SetPosition( D3DXVECTOR3(-20, 30, 50) );
 	Light2->SetScale( 0.2f );
 
-
+	Teapot->SetPosition(D3DXVECTOR3(0, 10, 40));
+	Teapot->SetScale( 2 );
 	//////////////////
 	// Load textures
 
 	if (FAILED( D3DX10CreateShaderResourceViewFromFile( g_pd3dDevice, L"StoneDiffuseSpecular.dds", NULL, NULL, &CubeDiffuseMap,  NULL ) ))
 		return false;
 	if (FAILED( D3DX10CreateShaderResourceViewFromFile( g_pd3dDevice, L"WoodDiffuseSpecular.dds",  NULL, NULL, &FloorDiffuseMap, NULL ) ))
+		return false;
+	if (FAILED(D3DX10CreateShaderResourceViewFromFile(g_pd3dDevice, L"StoneDiffuseSpecular.dds", NULL, NULL, &StoneDiffuseMap, NULL)))
 		return false;
 
 	return true;
@@ -350,6 +360,8 @@ void UpdateScene( float frameTime )
 
 	// Second light doesn't move, but do need to make sure its matrix has been calculated - could do this in InitScene instead
 	Light2->UpdateMatrix();
+
+	Teapot->UpdateMatrix();
 }
 
 
@@ -397,6 +409,9 @@ void RenderScene()
 	ModelColourVar->SetRawValue( Light2Colour, 0, 12 );
 	Light2->Render( PlainColourTechnique );
 
+	WorldMatrixVar->SetMatrix((float*)Teapot->GetWorldMatrix());
+	DiffuseMapVar->SetResource(StoneDiffuseMap);
+	Teapot->Render(TintDiffuse);
 
 	//---------------------------
 	// Display the Scene
