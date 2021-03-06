@@ -53,6 +53,7 @@
     <ClCompile Include="Camera.cpp" />
     <ClCompile Include="Model.cpp" />
     <ClCompile Include="Main.cpp" />
+    <ClCompile Include="Light.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Resource.h">
@@ -124,6 +125,7 @@
     <ClInclude Include="Import\Common\GenDefines.h">
       <Filter>Import\Common</Filter>
     </ClInclude>
+    <ClInclude Include="Light.h" />
   </ItemGroup>
   <ItemGroup>
     <None Include="GraphicsAssign1.fx" />

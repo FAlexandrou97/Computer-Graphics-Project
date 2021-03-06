@@ -57,20 +57,25 @@ ID3D10ShaderResourceView* StoneDiffuseMap = NULL;
 // Light data - stored manually as there is no light class
 D3DXVECTOR3 Light1Colour = D3DXVECTOR3( 1.0f, 0.0f, 0.7f );
 D3DXVECTOR3 Light2Colour = D3DXVECTOR3( 1.0f, 0.8f, 0.2f );
+D3DXVECTOR3 TeapotLight1Colour = D3DXVECTOR3(1.0f, 0.0f, 0.7f);
+D3DXVECTOR3 TeapotLight2Colour = D3DXVECTOR3(1.0f, 0.4f, 0.2f);
+D3DXVECTOR3 TeapotLight3Colour = D3DXVECTOR3(5.0f, 0.8f, 0.7f);
 D3DXVECTOR3 AmbientColour = D3DXVECTOR3( 0.2f, 0.2f, 0.2f );
 float SpecularPower = 256.0f;
-
+int TeapotLight1FSM = 1;
+int TeapotLight2FSM = 1;
+int TeapotLight3FSM = 1;
 // Display models where the lights are. One of the lights will follow an orbit
 CModel* Light1;
 CModel* Light2;
+CModel* TeapotLight1;
+CModel* TeapotLight2;
+CModel* TeapotLight3;
 const float LightOrbitRadius = 20.0f;
 const float LightOrbitSpeed  = 0.5f;
 
-
 CModel* Teapot;
 // Note: There are move & rotation speed constants in Defines.h
-
-
 
 //--------------------------------------------------------------------------------------
 // Shader Variables
@@ -82,6 +87,7 @@ ID3D10Effect*          Effect = NULL;
 ID3D10EffectTechnique* PlainColourTechnique = NULL;
 ID3D10EffectTechnique* TintDiffuse = NULL;
 ID3D10EffectTechnique* WiggleTechnique = NULL;
+ID3D10EffectTechnique* VertexLitTechnique = NULL;
 
 // Matrices
 ID3D10EffectMatrixVariable* WorldMatrixVar = NULL;
@@ -95,6 +101,16 @@ ID3D10EffectShaderResourceVariable* DiffuseMapVar = NULL;
 
 // Miscellaneous
 ID3D10EffectVectorVariable* ModelColourVar = NULL;
+
+// Light Effect Variables
+ID3D10EffectVectorVariable* TeapotLight1PosVar = NULL;
+ID3D10EffectVectorVariable* TeapotLight1ColourVar = NULL;
+ID3D10EffectVectorVariable* TeapotLight2PosVar = NULL;
+ID3D10EffectVectorVariable* TeapotLight2ColourVar = NULL;
+ID3D10EffectVectorVariable* TeapotLight3PosVar = NULL;
+ID3D10EffectVectorVariable* TeapotLight3ColourVar = NULL;
+ID3D10EffectVectorVariable* AmbientColourVar = NULL;
+ID3D10EffectScalarVariable* SpecularPowerVar = NULL;
 
 float g_WiggleVar;
 
@@ -154,7 +170,6 @@ bool InitDevice(HWND hWnd)
 	hr = D3D10CreateDeviceAndSwapChain( NULL, D3D10_DRIVER_TYPE_HARDWARE, NULL, 0,
 										D3D10_SDK_VERSION, &sd, &SwapChain, &g_pd3dDevice );
 	if( FAILED( hr ) ) return false;
-
 
 	// Specify the render target as the back-buffer - this is an advanced topic. This code almost always occurs in the standard D3D setup
 	ID3D10Texture2D* pBackBuffer;
@@ -222,7 +237,9 @@ void ReleaseResources()
 	delete Cube;
 	delete Camera;
 	delete Teapot;
-
+	delete TeapotLight1;
+	delete TeapotLight2;
+	delete TeapotLight3;
     if( FloorDiffuseMap )  FloorDiffuseMap->Release();
     if( CubeDiffuseMap )   CubeDiffuseMap->Release();
     if( StoneDiffuseMap )  StoneDiffuseMap->Release();
@@ -262,6 +279,7 @@ bool LoadEffectFile()
 	PlainColourTechnique = Effect->GetTechniqueByName("PlainColour");
 	TintDiffuse = Effect->GetTechniqueByName("TintDiffuse");
 	WiggleTechnique = Effect->GetTechniqueByName("WiggleTechnique");
+	VertexLitTechnique = Effect->GetTechniqueByName("VertexLitTechnique");
 
 	// Create special variables to allow us to access global variables in the shaders from C++
 	WorldMatrixVar    = Effect->GetVariableByName( "WorldMatrix" )->AsMatrix();
@@ -275,6 +293,16 @@ bool LoadEffectFile()
 	// Other shader variables
 	ModelColourVar = Effect->GetVariableByName( "ModelColour"  )->AsVector();
 	g_pCubeWiggleVar = Effect->GetVariableByName("Wiggle")->AsScalar();
+
+	// Access shader variables needed for lighting
+	TeapotLight1ColourVar = Effect->GetVariableByName("TeapotLight1Colour")->AsVector();
+	TeapotLight1PosVar = Effect->GetVariableByName("TeapotLight1Pos")->AsVector();
+	TeapotLight2ColourVar = Effect->GetVariableByName("TeapotLight2Colour")->AsVector();
+	TeapotLight2PosVar = Effect->GetVariableByName("TeapotLight2Pos")->AsVector();
+	TeapotLight3ColourVar = Effect->GetVariableByName("TeapotLight3Colour")->AsVector();
+	TeapotLight3PosVar = Effect->GetVariableByName("TeapotLight3Pos")->AsVector();
+	AmbientColourVar = Effect->GetVariableByName("AmbientColour")->AsVector();
+	SpecularPowerVar = Effect->GetVariableByName("SpecularPower")->AsScalar();
 
 	return true;
 }
@@ -304,6 +332,9 @@ bool InitScene()
 	Light1 = new CModel;
 	Light2 = new CModel;
 	Teapot = new CModel;
+	TeapotLight1 = new CModel;
+	TeapotLight2 = new CModel;
+	TeapotLight3 = new CModel;
 
 	// The model class can load ".X" files. It encapsulates (i.e. hides away from this code) the file loading/parsing and creation of vertex/index buffers
 	// We must pass an example technique used for each model. We can then only render models with techniques that uses matching vertex input data
@@ -311,7 +342,10 @@ bool InitScene()
 	if (!Floor-> Load( "Floor.x", PlainColourTechnique )) return false;
 	if (!Light1->Load( "Sphere.x", PlainColourTechnique )) return false;
 	if (!Light2->Load( "Sphere.x", PlainColourTechnique )) return false;
-	if (!Teapot->Load( "Teapot.x", PlainColourTechnique )) return false;
+	if (!Teapot->Load( "Teapot.x", VertexLitTechnique )) return false;
+	if (!TeapotLight1->Load("Sphere.x", PlainColourTechnique)) return false;
+	if (!TeapotLight2->Load("Sphere.x", PlainColourTechnique)) return false;
+	if (!TeapotLight3->Load("Sphere.x", PlainColourTechnique)) return false;
 
 	// Initial positions
 	Cube->SetPosition( D3DXVECTOR3(0, 10, 0) );
@@ -320,8 +354,15 @@ bool InitScene()
 	Light2->SetPosition( D3DXVECTOR3(-20, 30, 50) );
 	Light2->SetScale( 0.2f );
 
-	Teapot->SetPosition(D3DXVECTOR3(0, 10, 40));
-	Teapot->SetScale( 2 );
+	Teapot->SetPosition(D3DXVECTOR3(0, 0, 80));
+
+	TeapotLight1->SetPosition(D3DXVECTOR3(0, 15, 80));
+	TeapotLight1->SetScale(0.2f);
+	TeapotLight2->SetPosition(D3DXVECTOR3(20, 5, 80));
+	TeapotLight2->SetScale(0.2f);
+	TeapotLight3->SetPosition(D3DXVECTOR3(-20, 5, 80));
+	TeapotLight3->SetScale(0.2f);
+
 	//////////////////
 	// Load textures
 
@@ -357,11 +398,68 @@ void UpdateScene( float frameTime )
 	Light1->SetPosition( Cube->GetPosition() + D3DXVECTOR3(cos(Rotate)*LightOrbitRadius, 0, sin(Rotate)*LightOrbitRadius) );
 	Rotate -= LightOrbitSpeed * frameTime;
 	Light1->UpdateMatrix();
-
 	// Second light doesn't move, but do need to make sure its matrix has been calculated - could do this in InitScene instead
 	Light2->UpdateMatrix();
 
+	//TeapotLight1Colour = D3DXVECTOR3(0, 0, 0);
+	// Update teapot lights
+	switch (TeapotLight1FSM)
+	{
+	case 0:
+		TeapotLight1Colour.operator+=(D3DXVECTOR3(0.5f * frameTime, 0.5f * frameTime, 0.5f * frameTime));
+		if (TeapotLight1Colour.x > 0.7f && TeapotLight1Colour.y > 1.0f && TeapotLight1Colour.z > 1.0f)
+			TeapotLight1FSM = 1;
+		break;
+	case 1:
+		TeapotLight1Colour.operator-=(D3DXVECTOR3(0.5f * frameTime, 0.5f * frameTime, 0.5f * frameTime));
+		if (TeapotLight1Colour.x < 0 && TeapotLight1Colour.y < 0. && TeapotLight1Colour.z < 0)
+			TeapotLight1FSM = 0;
+		break;
+	default:
+		break;
+	}
+
+	/*if (TeapotLight1Colour.x > 0 || TeapotLight1Colour.y > 0. || TeapotLight1Colour.z > 0)
+		TeapotLight1Colour.operator-=(D3DXVECTOR3(0.5f * frameTime, 0.5f * frameTime, 0.5f * frameTime));
+	else if (TeapotLight1Colour.x < 0.7f || TeapotLight1Colour.y < 1.0f || TeapotLight1Colour.z < 1.0f)
+		TeapotLight1Colour.operator+=(D3DXVECTOR3(0.5f * frameTime, 0.5f * frameTime, 0.5f * frameTime));*/
+
+	switch (TeapotLight2FSM)
+	{
+	case 0:
+		TeapotLight2Colour.x -= 0.5f * frameTime;
+		if (TeapotLight2Colour.x < 0.0f)
+			TeapotLight2FSM = 1;
+		break;
+	case 1:
+		TeapotLight2Colour.x += 0.5f * frameTime;
+		if (TeapotLight2Colour.x > 1.0f)
+			TeapotLight2FSM = 0;
+		break;
+	default:
+		break;
+	}
+
+	switch (TeapotLight3FSM)
+	{
+	case 0:
+		TeapotLight3Colour.z -= 0.5f * frameTime;
+		if (TeapotLight3Colour.z < 0.0f)
+			TeapotLight3FSM = 1;
+		break;
+	case 1:
+		TeapotLight3Colour.z += 0.5f * frameTime;
+		if (TeapotLight3Colour.z > 1.0f)
+			TeapotLight3FSM = 0;
+		break;
+	default:
+		break;
+	}
+
 	Teapot->UpdateMatrix();
+	TeapotLight1->UpdateMatrix();
+	TeapotLight2->UpdateMatrix();
+	TeapotLight3->UpdateMatrix();
 }
 
 
@@ -383,6 +481,15 @@ void RenderScene()
 	ViewMatrixVar->SetMatrix( (float*)&Camera->GetViewMatrix() );
 	ProjMatrixVar->SetMatrix( (float*)&Camera->GetProjectionMatrix() );
 
+	// Pass light information to the vertex shader
+	TeapotLight1PosVar->SetRawValue(TeapotLight1->GetPosition(), 0, 12);
+	TeapotLight1ColourVar->SetRawValue(TeapotLight1Colour, 0, 12);
+	TeapotLight2PosVar->SetRawValue(TeapotLight2->GetPosition(), 0, 12);
+	TeapotLight2ColourVar->SetRawValue(TeapotLight2Colour, 0, 12);
+	TeapotLight3PosVar->SetRawValue(TeapotLight3->GetPosition(), 0, 12);
+	TeapotLight3ColourVar->SetRawValue(TeapotLight3Colour, 0, 12);
+	AmbientColourVar->SetRawValue(AmbientColour, 0, 12);
+	SpecularPowerVar->SetFloat(SpecularPower);
 
 	//---------------------------
 	// Render each model
@@ -411,8 +518,19 @@ void RenderScene()
 
 	WorldMatrixVar->SetMatrix((float*)Teapot->GetWorldMatrix());
 	DiffuseMapVar->SetResource(StoneDiffuseMap);
-	Teapot->Render(TintDiffuse);
+	Teapot->Render(VertexLitTechnique);
 
+	WorldMatrixVar->SetMatrix((float*)TeapotLight1->GetWorldMatrix());
+	ModelColourVar->SetRawValue(TeapotLight1Colour, 0, 12);
+	TeapotLight1->Render(PlainColourTechnique);
+
+	WorldMatrixVar->SetMatrix((float*)TeapotLight2->GetWorldMatrix());
+	ModelColourVar->SetRawValue(TeapotLight2Colour, 0, 12);
+	TeapotLight2->Render(PlainColourTechnique);
+
+	WorldMatrixVar->SetMatrix((float*)TeapotLight3->GetWorldMatrix());
+	ModelColourVar->SetRawValue(TeapotLight3Colour, 0, 12);
+	TeapotLight3->Render(PlainColourTechnique);
 	//---------------------------
 	// Display the Scene
 

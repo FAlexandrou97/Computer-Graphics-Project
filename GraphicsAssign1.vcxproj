@@ -235,6 +235,7 @@
     <ClInclude Include="Import\Math\MathIO.h" />
     <ClInclude Include="Import\MeshData.h" />
     <ClInclude Include="Input.h" />
+    <ClInclude Include="Light.h" />
     <ClInclude Include="Model.h" />
     <ClInclude Include="Resource.h" />
   </ItemGroup>
@@ -255,6 +256,7 @@
     <ClCompile Include="Import\Math\CVector3.cpp" />
     <ClCompile Include="Import\Math\CVector4.cpp" />
     <ClCompile Include="Import\Math\MathIO.cpp" />
+    <ClCompile Include="Light.cpp" />
     <ClCompile Include="Main.cpp" />
     <ClCompile Include="Model.cpp" />
     <ClCompile Include="GraphicsAssign1.cpp" />
