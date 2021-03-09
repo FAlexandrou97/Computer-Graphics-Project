@@ -46,11 +46,15 @@
 // The CModel class collects together geometry and world matrix, and provides functions to control the model and render it
 // The CCamera class handles the view and projections matrice, and provides functions to control the camera
 CModel* Cube;
+CModel* Box;
 CModel* Floor;
 CCamera* Camera;
 
 // Textures - no texture class yet so using DirectX variables
 ID3D10ShaderResourceView* CubeDiffuseMap = NULL;
+ID3D10ShaderResourceView* LightDiffuseMap = NULL;
+ID3D10ShaderResourceView* BoxDiffuseMap = NULL;
+ID3D10ShaderResourceView* BoxNormalMap = NULL;
 ID3D10ShaderResourceView* FloorDiffuseMap = NULL;
 ID3D10ShaderResourceView* StoneDiffuseMap = NULL;
 
@@ -71,8 +75,8 @@ CModel* Light2;
 CModel* TeapotLight1;
 CModel* TeapotLight2;
 CModel* TeapotLight3;
-const float LightOrbitRadius = 20.0f;
-const float LightOrbitSpeed  = 0.5f;
+const float LightOrbitRadius = 15.0f;
+const float LightOrbitSpeed  = 0.7f;
 
 CModel* Teapot;
 // Note: There are move & rotation speed constants in Defines.h
@@ -88,6 +92,8 @@ ID3D10EffectTechnique* PlainColourTechnique = NULL;
 ID3D10EffectTechnique* TintDiffuse = NULL;
 ID3D10EffectTechnique* WiggleTechnique = NULL;
 ID3D10EffectTechnique* VertexLitTechnique = NULL;
+ID3D10EffectTechnique* AdditiveTexTintTechnique = NULL;
+ID3D10EffectTechnique* NormalMappingTechnique = NULL;
 
 // Matrices
 ID3D10EffectMatrixVariable* WorldMatrixVar = NULL;
@@ -98,17 +104,24 @@ ID3D10EffectScalarVariable* g_pCubeWiggleVar = NULL;
 
 // Textures
 ID3D10EffectShaderResourceVariable* DiffuseMapVar = NULL;
+ID3D10EffectShaderResourceVariable* NormalMapVar = NULL;
 
 // Miscellaneous
 ID3D10EffectVectorVariable* ModelColourVar = NULL;
 
 // Light Effect Variables
+ID3D10EffectVectorVariable* Light1PosVar = NULL;
+ID3D10EffectVectorVariable* Light1ColourVar = NULL;
+ID3D10EffectVectorVariable* Light2PosVar = NULL;
+ID3D10EffectVectorVariable* Light2ColourVar = NULL;
 ID3D10EffectVectorVariable* TeapotLight1PosVar = NULL;
 ID3D10EffectVectorVariable* TeapotLight1ColourVar = NULL;
 ID3D10EffectVectorVariable* TeapotLight2PosVar = NULL;
 ID3D10EffectVectorVariable* TeapotLight2ColourVar = NULL;
 ID3D10EffectVectorVariable* TeapotLight3PosVar = NULL;
 ID3D10EffectVectorVariable* TeapotLight3ColourVar = NULL;
+
+ID3D10EffectVectorVariable* TintColourVar = NULL;
 ID3D10EffectVectorVariable* AmbientColourVar = NULL;
 ID3D10EffectScalarVariable* SpecularPowerVar = NULL;
 
@@ -235,6 +248,7 @@ void ReleaseResources()
 	delete Light1;
 	delete Floor;
 	delete Cube;
+	delete Box;
 	delete Camera;
 	delete Teapot;
 	delete TeapotLight1;
@@ -242,6 +256,9 @@ void ReleaseResources()
 	delete TeapotLight3;
     if( FloorDiffuseMap )  FloorDiffuseMap->Release();
     if( CubeDiffuseMap )   CubeDiffuseMap->Release();
+	if( LightDiffuseMap )  LightDiffuseMap->Release();
+    if( BoxDiffuseMap )    BoxDiffuseMap->Release();
+    if( BoxNormalMap )     BoxNormalMap->Release();
     if( StoneDiffuseMap )  StoneDiffuseMap->Release();
 	if( Effect )           Effect->Release();
 	if( DepthStencilView ) DepthStencilView->Release();
@@ -280,6 +297,8 @@ bool LoadEffectFile()
 	TintDiffuse = Effect->GetTechniqueByName("TintDiffuse");
 	WiggleTechnique = Effect->GetTechniqueByName("WiggleTechnique");
 	VertexLitTechnique = Effect->GetTechniqueByName("VertexLitTechnique");
+	AdditiveTexTintTechnique = Effect->GetTechniqueByName("AdditiveTexTint");
+	NormalMappingTechnique = Effect->GetTechniqueByName("NormalMapping");
 
 	// Create special variables to allow us to access global variables in the shaders from C++
 	WorldMatrixVar    = Effect->GetVariableByName( "WorldMatrix" )->AsMatrix();
@@ -289,18 +308,25 @@ bool LoadEffectFile()
 	// We access the texture variable in the shader in the same way as we have before for matrices, light data etc.
 	// Only difference is that this variable is a "Shader Resource"
 	DiffuseMapVar = Effect->GetVariableByName( "DiffuseMap" )->AsShaderResource();
+	NormalMapVar  = Effect->GetVariableByName("NormalMap")->AsShaderResource();
 
 	// Other shader variables
 	ModelColourVar = Effect->GetVariableByName( "ModelColour"  )->AsVector();
 	g_pCubeWiggleVar = Effect->GetVariableByName("Wiggle")->AsScalar();
 
 	// Access shader variables needed for lighting
+	Light1ColourVar = Effect->GetVariableByName("Light1Colour")->AsVector();
+	Light1PosVar = Effect->GetVariableByName("Light1Pos")->AsVector();
+	Light2ColourVar = Effect->GetVariableByName("Light2Colour")->AsVector();
+	Light2PosVar = Effect->GetVariableByName("Light2Pos")->AsVector();
 	TeapotLight1ColourVar = Effect->GetVariableByName("TeapotLight1Colour")->AsVector();
 	TeapotLight1PosVar = Effect->GetVariableByName("TeapotLight1Pos")->AsVector();
 	TeapotLight2ColourVar = Effect->GetVariableByName("TeapotLight2Colour")->AsVector();
 	TeapotLight2PosVar = Effect->GetVariableByName("TeapotLight2Pos")->AsVector();
 	TeapotLight3ColourVar = Effect->GetVariableByName("TeapotLight3Colour")->AsVector();
 	TeapotLight3PosVar = Effect->GetVariableByName("TeapotLight3Pos")->AsVector();
+
+	TintColourVar = Effect->GetVariableByName("TintColour")->AsVector();
 	AmbientColourVar = Effect->GetVariableByName("AmbientColour")->AsVector();
 	SpecularPowerVar = Effect->GetVariableByName("SpecularPower")->AsScalar();
 
@@ -328,6 +354,7 @@ bool InitScene()
 	// Load/Create models
 
 	Cube = new CModel;
+	Box = new CModel;
 	Floor = new CModel;
 	Light1 = new CModel;
 	Light2 = new CModel;
@@ -339,9 +366,10 @@ bool InitScene()
 	// The model class can load ".X" files. It encapsulates (i.e. hides away from this code) the file loading/parsing and creation of vertex/index buffers
 	// We must pass an example technique used for each model. We can then only render models with techniques that uses matching vertex input data
 	if (!Cube->  Load( "Cube.x",  PlainColourTechnique )) return false;
+	if (!Box->  Load( "CardboardBox.x", NormalMappingTechnique, true)) return false;
 	if (!Floor-> Load( "Floor.x", PlainColourTechnique )) return false;
-	if (!Light1->Load( "Sphere.x", PlainColourTechnique )) return false;
-	if (!Light2->Load( "Sphere.x", PlainColourTechnique )) return false;
+	if (!Light1->Load( "Light.x", AdditiveTexTintTechnique )) return false;
+	if (!Light2->Load( "Light.x", AdditiveTexTintTechnique)) return false;
 	if (!Teapot->Load( "Teapot.x", VertexLitTechnique )) return false;
 	if (!TeapotLight1->Load("Sphere.x", PlainColourTechnique)) return false;
 	if (!TeapotLight2->Load("Sphere.x", PlainColourTechnique)) return false;
@@ -349,14 +377,16 @@ bool InitScene()
 
 	// Initial positions
 	Cube->SetPosition( D3DXVECTOR3(0, 10, 0) );
+	Box->SetPosition( D3DXVECTOR3(30, 10, 0) );
+	Box->SetScale( 8.0f );
 	Light1->SetPosition( D3DXVECTOR3(30, 10, 0) );
-	Light1->SetScale( 0.1f ); // Nice if size of light reflects its brightness
+	Light1->SetScale( 4.0f ); // Nice if size of light reflects its brightness
 	Light2->SetPosition( D3DXVECTOR3(-20, 30, 50) );
-	Light2->SetScale( 0.2f );
+	Light2->SetScale(4.0f );
 
 	Teapot->SetPosition(D3DXVECTOR3(0, 0, 80));
 
-	TeapotLight1->SetPosition(D3DXVECTOR3(0, 15, 80));
+	TeapotLight1->SetPosition(D3DXVECTOR3(20, 15, 80));
 	TeapotLight1->SetScale(0.2f);
 	TeapotLight2->SetPosition(D3DXVECTOR3(20, 5, 80));
 	TeapotLight2->SetScale(0.2f);
@@ -366,12 +396,12 @@ bool InitScene()
 	//////////////////
 	// Load textures
 
-	if (FAILED( D3DX10CreateShaderResourceViewFromFile( g_pd3dDevice, L"StoneDiffuseSpecular.dds", NULL, NULL, &CubeDiffuseMap,  NULL ) ))
-		return false;
-	if (FAILED( D3DX10CreateShaderResourceViewFromFile( g_pd3dDevice, L"WoodDiffuseSpecular.dds",  NULL, NULL, &FloorDiffuseMap, NULL ) ))
-		return false;
-	if (FAILED(D3DX10CreateShaderResourceViewFromFile(g_pd3dDevice, L"StoneDiffuseSpecular.dds", NULL, NULL, &StoneDiffuseMap, NULL)))
-		return false;
+	if (FAILED( D3DX10CreateShaderResourceViewFromFile( g_pd3dDevice, L"StoneDiffuseSpecular.dds", NULL, NULL, &CubeDiffuseMap,  NULL ) )) return false;
+	if (FAILED( D3DX10CreateShaderResourceViewFromFile( g_pd3dDevice, L"WoodDiffuseSpecular.dds",  NULL, NULL, &FloorDiffuseMap, NULL ) )) return false;
+	if (FAILED(D3DX10CreateShaderResourceViewFromFile(g_pd3dDevice, L"StoneDiffuseSpecular.dds", NULL, NULL, &StoneDiffuseMap, NULL))) return false;
+	if (FAILED(D3DX10CreateShaderResourceViewFromFile(g_pd3dDevice, L"PatternNormal.dds", NULL, NULL, &BoxNormalMap, NULL))) return false;
+	if (FAILED(D3DX10CreateShaderResourceViewFromFile(g_pd3dDevice, L"PatternDiffuseSpecular.dds", NULL, NULL, &BoxDiffuseMap, NULL))) return false;
+	if (FAILED(D3DX10CreateShaderResourceViewFromFile(g_pd3dDevice, L"flare.jpg", NULL, NULL, &LightDiffuseMap, NULL))) return false;
 
 	return true;
 }
@@ -389,13 +419,15 @@ void UpdateScene( float frameTime )
 	Cube->Control( frameTime, Key_I, Key_K, Key_J, Key_L, Key_U, Key_O, Key_Period, Key_Comma );
 	Cube->UpdateMatrix();
 
+	Box->UpdateMatrix();
+
 	// Wiggle effect
 	g_WiggleVar += 6 * frameTime;
 	g_pCubeWiggleVar->SetFloat(g_WiggleVar);
 
 	// Update the orbiting light - a bit of a cheat with the static variable [ask the tutor if you want to know what this is]
 	static float Rotate = 0.0f;
-	Light1->SetPosition( Cube->GetPosition() + D3DXVECTOR3(cos(Rotate)*LightOrbitRadius, 0, sin(Rotate)*LightOrbitRadius) );
+	Light1->SetPosition( Box->GetPosition() + D3DXVECTOR3(cos(Rotate)*LightOrbitRadius, 0, sin(Rotate)*LightOrbitRadius) );
 	Rotate -= LightOrbitSpeed * frameTime;
 	Light1->UpdateMatrix();
 	// Second light doesn't move, but do need to make sure its matrix has been calculated - could do this in InitScene instead
@@ -482,6 +514,10 @@ void RenderScene()
 	ProjMatrixVar->SetMatrix( (float*)&Camera->GetProjectionMatrix() );
 
 	// Pass light information to the vertex shader
+	Light1PosVar->SetRawValue(Light1->GetPosition(), 0, 12);  // Send 3 floats (12 bytes) from C++ LightPos variable (x,y,z) to shader counterpart (middle parameter is unused) 
+	Light1ColourVar->SetRawValue(Light1Colour, 0, 12);
+	Light2PosVar->SetRawValue(Light2->GetPosition(), 0, 12);
+	Light2ColourVar->SetRawValue(Light2Colour, 0, 12);
 	TeapotLight1PosVar->SetRawValue(TeapotLight1->GetPosition(), 0, 12);
 	TeapotLight1ColourVar->SetRawValue(TeapotLight1Colour, 0, 12);
 	TeapotLight2PosVar->SetRawValue(TeapotLight2->GetPosition(), 0, 12);
@@ -498,24 +534,33 @@ void RenderScene()
 	D3DXVECTOR3 Black( 0.0f, 0.0f, 0.0f );
 	D3DXVECTOR3 Blue( 0.0f, 0.0f, 1.0f );
 
-	// Render cube
+	// Cube
 	WorldMatrixVar->SetMatrix( (float*)Cube->GetWorldMatrix() );  // Send the cube's world matrix to the shader
     DiffuseMapVar->SetResource( CubeDiffuseMap );                 // Send the cube's diffuse/specular map to the shader
 	Cube->Render( WiggleTechnique );                         // Pass rendering technique to the model class
 
-	// Same for the other models in the scene
-	WorldMatrixVar->SetMatrix( (float*)Floor->GetWorldMatrix() );
-    DiffuseMapVar->SetResource( FloorDiffuseMap );
-	Floor->Render( TintDiffuse );
+	// Box
+	WorldMatrixVar->SetMatrix((float*)Box->GetWorldMatrix());
+	DiffuseMapVar->SetResource(BoxDiffuseMap);
+	NormalMapVar->SetResource(BoxNormalMap);
+	Box->Render( NormalMappingTechnique );
+
+	WorldMatrixVar->SetMatrix((float*)Floor->GetWorldMatrix());
+	DiffuseMapVar->SetResource(FloorDiffuseMap);
+	Floor->Render(VertexLitTechnique);
 
 	WorldMatrixVar->SetMatrix( (float*)Light1->GetWorldMatrix() );
-	ModelColourVar->SetRawValue( Light1Colour, 0, 12 );
-	Light1->Render( PlainColourTechnique );
+	DiffuseMapVar->SetResource(LightDiffuseMap);
+	TintColourVar->SetRawValue(Light1Colour, 0, 12);
+	Light1->Render( AdditiveTexTintTechnique );
 
 	WorldMatrixVar->SetMatrix( (float*)Light2->GetWorldMatrix() );
-	ModelColourVar->SetRawValue( Light2Colour, 0, 12 );
-	Light2->Render( PlainColourTechnique );
+	DiffuseMapVar->SetResource(LightDiffuseMap);
+	TintColourVar->SetRawValue(Light2Colour, 0, 12);
+	Light2->Render( AdditiveTexTintTechnique );
 
+	//---------------------------
+	// Teapot with 3 lights
 	WorldMatrixVar->SetMatrix((float*)Teapot->GetWorldMatrix());
 	DiffuseMapVar->SetResource(StoneDiffuseMap);
 	Teapot->Render(VertexLitTechnique);
