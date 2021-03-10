@@ -43,6 +43,8 @@
 //--------------------------------------------------------------------------------------
 float g_WiggleVar;
 const int g_numLights = 3;
+float g_parallaxDepth = 0.05f; // Overall depth of bumpiness for parallax mapping
+bool g_useParallax = false;  // Toggle for parallax 
 
 // Models and cameras encapsulated in classes for flexibity and convenience
 // The CModel class collects together geometry and world matrix, and provides functions to control the model and render it
@@ -58,10 +60,11 @@ ID3D10ShaderResourceView* LightDiffuseMap = NULL;
 ID3D10ShaderResourceView* BoxDiffuseMap = NULL;
 ID3D10ShaderResourceView* BoxNormalMap = NULL;
 ID3D10ShaderResourceView* FloorDiffuseMap = NULL;
+ID3D10ShaderResourceView* FloorNormalMap = NULL;
 ID3D10ShaderResourceView* StoneDiffuseMap = NULL;
 
 // Light data - stored manually as there is no light class
-D3DXVECTOR3 AmbientColour = D3DXVECTOR3( 0.15f, 0.15f, 0.15f );
+D3DXVECTOR3 AmbientColour = D3DXVECTOR3( 0.2f, 0.2f, 0.2f );
 float SpecularPower = 256.0f;
 // Display models where the lights are. One of the lights will follow an orbit
 CLight* Light1;
@@ -101,6 +104,7 @@ ID3D10EffectShaderResourceVariable* NormalMapVar = NULL;
 
 // Miscellaneous
 ID3D10EffectVectorVariable* ModelColourVar = NULL;
+ID3D10EffectScalarVariable* ParallaxDepthVar = NULL;
 
 // Light Effect Variables
 ID3D10EffectVectorVariable* Light1PosVar = NULL;
@@ -326,6 +330,7 @@ bool LoadEffectFile()
 	TintColourVar = Effect->GetVariableByName("TintColour")->AsVector();
 	AmbientColourVar = Effect->GetVariableByName("AmbientColour")->AsVector();
 	SpecularPowerVar = Effect->GetVariableByName("SpecularPower")->AsScalar();
+	ParallaxDepthVar = Effect->GetVariableByName("ParallaxDepth")->AsScalar();
 
 	return true;
 }
@@ -364,7 +369,7 @@ bool InitScene()
 	// We must pass an example technique used for each model. We can then only render models with techniques that uses matching vertex input data
 	if (!Cube->  Load( "Cube.x",  PlainColourTechnique )) return false;
 	if (!Box->  Load( "CardboardBox.x", NormalMappingTechnique, true)) return false;
-	if (!Floor-> Load( "Floor.x", PlainColourTechnique )) return false;
+	if (!Floor-> Load( "Floor.x", NormalMappingTechnique, true )) return false;
 	if (!Light1->Load( "Light.x", AdditiveTexTintTechnique )) return false;
 	if (!Light2->Load( "Light.x", AdditiveTexTintTechnique)) return false;
 	if (!Teapot->Load( "Teapot.x", VertexLitTechnique )) return false;
@@ -401,7 +406,8 @@ bool InitScene()
 	// Load textures
 
 	if (FAILED( D3DX10CreateShaderResourceViewFromFile( g_pd3dDevice, L"StoneDiffuseSpecular.dds", NULL, NULL, &CubeDiffuseMap,  NULL ) )) return false;
-	if (FAILED( D3DX10CreateShaderResourceViewFromFile( g_pd3dDevice, L"WoodDiffuseSpecular.dds",  NULL, NULL, &FloorDiffuseMap, NULL ) )) return false;
+	if (FAILED( D3DX10CreateShaderResourceViewFromFile( g_pd3dDevice, L"CobbleDiffuseSpecular.dds",  NULL, NULL, &FloorDiffuseMap, NULL ) )) return false;
+	if (FAILED( D3DX10CreateShaderResourceViewFromFile( g_pd3dDevice, L"CobbleNormalDepth.dds",      NULL, NULL, &FloorNormalMap,   NULL ) )) return false;
 	if (FAILED(D3DX10CreateShaderResourceViewFromFile(g_pd3dDevice, L"StoneDiffuseSpecular.dds", NULL, NULL, &StoneDiffuseMap, NULL))) return false;
 	if (FAILED(D3DX10CreateShaderResourceViewFromFile(g_pd3dDevice, L"PatternNormal.dds", NULL, NULL, &BoxNormalMap, NULL))) return false;
 	if (FAILED(D3DX10CreateShaderResourceViewFromFile(g_pd3dDevice, L"PatternDiffuseSpecular.dds", NULL, NULL, &BoxDiffuseMap, NULL))) return false;
@@ -449,6 +455,11 @@ void UpdateScene( float frameTime )
 	for (int i = 0; i < g_numLights; i++) {
 		TeapotLights[i]->UpdateMatrix();
 	}
+
+	if (KeyHit(Key_1))
+	{
+		g_useParallax = !g_useParallax;
+	}
 }
 
 
@@ -483,6 +494,8 @@ void RenderScene()
 	TeapotLight3ColourVar->SetRawValue(TeapotLights[2]->GetColour(), 0, 12);
 	AmbientColourVar->SetRawValue(AmbientColour, 0, 12);
 	SpecularPowerVar->SetFloat(SpecularPower);
+	// Parallax mapping depth
+	ParallaxDepthVar->SetFloat(g_useParallax ? g_parallaxDepth : 0.0f);
 
 	//---------------------------
 	// Render each model
@@ -502,9 +515,11 @@ void RenderScene()
 	NormalMapVar->SetResource(BoxNormalMap);
 	Box->Render( NormalMappingTechnique );
 
+	// Floor
 	WorldMatrixVar->SetMatrix((float*)Floor->GetWorldMatrix());
 	DiffuseMapVar->SetResource(FloorDiffuseMap);
-	Floor->Render(VertexLitTechnique);
+	NormalMapVar->SetResource(FloorNormalMap);
+	Floor->Render( NormalMappingTechnique);
 
 	WorldMatrixVar->SetMatrix( (float*)Light1->GetWorldMatrix() );
 	DiffuseMapVar->SetResource(LightDiffuseMap);
