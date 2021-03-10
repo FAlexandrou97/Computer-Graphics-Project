@@ -224,45 +224,58 @@ float3 WigglePixelShader(VS_BASIC_OUTPUT vOut) : SV_Target  // The ": SV_Target"
 //
 float4 VertexLitDiffuseMap(VS_LIGHTING_OUTPUT vOut) : SV_Target  // The ": SV_Target" bit just indicates that the returned float4 colour goes to the render target (i.e. it's a colour to render)
 {
-	// Re-normalize world normal
 	float3 worldNormal = normalize(vOut.WorldNormal);
-	
-	// Calculate direction of light and camera
+
+
+	///////////////////////
+	// Calculate lighting
+
+	// Calculate direction of camera
 	float3 CameraDir = normalize(CameraPos - vOut.WorldPos.xyz); // Position of camera - position of current vertex (or pixel) (in world space)
-	
-	float3 LightDir = normalize(TeapotLight1Pos - vOut.WorldPos.xyz);   // Same for light
+
+	//// LIGHT 1
+	float3 Light1Dir = normalize(TeapotLight1Pos - vOut.WorldPos.xyz);   // Direction for each light is different
+	float3 Light1Dist = length(TeapotLight1Pos - vOut.WorldPos.xyz);
+	float3 DiffuseLight1 = TeapotLight1Colour * saturate(dot(worldNormal.xyz, Light1Dir)) / Light1Dist;
+	float3 halfway = normalize(Light1Dir + CameraDir);
+	float3 SpecularLight1 = DiffuseLight1 * pow(saturate(dot(worldNormal.xyz, halfway)), SpecularPower);
+
+	//// LIGHT 2
 	float3 Light2Dir = normalize(TeapotLight2Pos - vOut.WorldPos.xyz);
-	float3 Light3Dir = normalize(TeapotLight3Pos - vOut.WorldPos.xyz);
-
-	// Calculate lighting on this vertex (or pixel) - equations from lecture
-	float3 DiffuseLight = AmbientColour + TeapotLight1Colour * max(dot(worldNormal.xyz, LightDir), 0);
-	float3 Diffuse2Light = AmbientColour + TeapotLight2Colour * max(dot(worldNormal.xyz, Light2Dir), 0);
-	float3 Diffuse3Light = AmbientColour + TeapotLight3Colour * max(dot(worldNormal.xyz, Light3Dir), 0);
-
-	float3 halfway = normalize(LightDir + CameraDir);
-	float3 halfway2 = normalize(Light2Dir + CameraDir);
-	float3 halfway3 = normalize(Light3Dir + CameraDir);
-	float3 SpecularLight = DiffuseLight * pow(max(dot(worldNormal.xyz, halfway), 0), SpecularPower);
-	float3 Specular2Light = Diffuse2Light * pow(max(dot(worldNormal.xyz, halfway2), 0), SpecularPower);
-	float3 Specular3Light = Diffuse3Light * pow(max(dot(worldNormal.xyz, halfway3), 0), SpecularPower);
+	float3 Light2Dist = length(TeapotLight2Pos - vOut.WorldPos.xyz);
+	float3 DiffuseLight2 = TeapotLight2Colour * saturate(dot(worldNormal.xyz, Light2Dir)) / Light2Dist;
+	halfway = normalize(Light2Dir + CameraDir);
+	float3 SpecularLight2 = DiffuseLight2 * pow(saturate(dot(worldNormal.xyz, halfway)), SpecularPower);
 
 
-	//*********************************************************************************************
-	// Get colours from texture maps (only diffuse map supported at start of lab)
+	//// LIGHT 3
+	float3 Light3Dir = normalize(TeapotLight3Pos - vOut.WorldPos.xyz);   // Direction for each light is different
+	float3 Light3Dist = length(TeapotLight3Pos - vOut.WorldPos.xyz);
+	float3 DiffuseLight3 = TeapotLight3Colour * saturate(dot(worldNormal.xyz, Light1Dir)) / Light3Dist;
+	halfway = normalize(Light3Dir + CameraDir);
+	float3 SpecularLight3 = DiffuseLight3 * pow(saturate(dot(worldNormal.xyz, halfway)), SpecularPower);
+
+	// Sum the effect of the two lights - add the ambient at this stage rather than for each light (or we will get twice the ambient level)
+	float3 DiffuseLight = AmbientColour + DiffuseLight1 + DiffuseLight2 + DiffuseLight3;
+	float3 SpecularLight = SpecularLight1 + SpecularLight2 + SpecularLight3;
+
+
+	////////////////////
+	// Sample texture
 
 	// Extract diffuse material colour for this pixel from a texture (using float3, so we get RGB - i.e. ignore any alpha in the texture)
-	float3 DiffuseMaterial = DiffuseMap.Sample(TrilinearWrap, vOut.UV).rgb;
+	float4 DiffuseMaterial = DiffuseMap.Sample(TrilinearWrap, vOut.UV);
 
 	// Assume specular material colour is white (i.e. highlights are a full, untinted reflection of light)
-	float3 SpecularMaterial = 1.0f;
+	float3 SpecularMaterial = DiffuseMaterial.a;
 
 
+	////////////////////
+	// Combine colours 
 
-	//*********************************************************************************************
-	// Combine colours (lighting, textures) for final pixel colour
-
+	// Combine maps and lighting for final pixel colour
 	float4 combinedColour;
-	combinedColour.rgb = DiffuseMaterial * (DiffuseLight + Diffuse2Light + Diffuse3Light) + SpecularMaterial * (SpecularLight + Specular2Light + Specular3Light);
+	combinedColour.rgb = DiffuseMaterial * DiffuseLight + SpecularMaterial * SpecularLight;
 	combinedColour.a = 1.0f; // No alpha processing in this shader, so just set it to 1
 
 	return combinedColour;
@@ -440,6 +453,10 @@ technique10 WiggleTechnique
 		SetVertexShader(CompileShader(vs_4_0, BasicTransform()));
 		SetGeometryShader(NULL);
 		SetPixelShader(CompileShader(ps_4_0, WigglePixelShader()));
+
+		SetBlendState(NoBlending, float4(0.0f, 0.0f, 0.0f, 0.0f), 0xFFFFFFFF);
+		SetRasterizerState(CullBack);
+		SetDepthStencilState(DepthWritesOn, 0);
 	}
 }
 
