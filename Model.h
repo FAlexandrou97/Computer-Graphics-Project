@@ -32,7 +32,10 @@ private:
 	// World matrix for the model - built from the above
 	D3DXMATRIX m_WorldMatrix;
 
-	
+	// Effect variable data
+	ID3D10EffectVectorVariable* m_PosVar = 0;
+	ID3D10EffectVectorVariable* m_ColourVar = 0;
+
 	//-----------------
 	// Geometry data
 
@@ -87,10 +90,17 @@ public:
 	{
 		return m_Scale;
 	}
-
 	D3DXMATRIX GetWorldMatrix()
 	{
 		return m_WorldMatrix;
+	}
+	ID3D10EffectVectorVariable* GetPosVar()
+	{
+		return m_PosVar;
+	}
+	ID3D10EffectVectorVariable* GetColourVar()
+	{
+		return m_ColourVar;
 	}
 
 
@@ -111,7 +121,14 @@ public:
 	{
 		m_Scale = D3DXVECTOR3( scale, scale, scale );
 	}
-
+	void SetPosVar(ID3D10EffectVectorVariable* posVar)
+	{
+		m_PosVar = posVar;
+	}
+	void SetColourVar(ID3D10EffectVectorVariable* colourVar)
+	{
+		m_ColourVar = colourVar;
+	}
 
 	/////////////////////////////
 	// Model Loading

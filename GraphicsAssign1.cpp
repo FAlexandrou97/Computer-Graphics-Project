@@ -45,6 +45,7 @@ float g_WiggleVar;
 const int g_numLights = 3;
 float g_parallaxDepth = 0.05f; // Overall depth of bumpiness for parallax mapping
 bool g_useParallax = false;  // Toggle for parallax 
+float g_clearColour[4] = { 0.2f, 0.2f, 0.3f, 1.0f }; // Good idea to match background to ambient colour
 
 // Models and cameras encapsulated in classes for flexibity and convenience
 // The CModel class collects together geometry and world matrix, and provides functions to control the model and render it
@@ -53,6 +54,26 @@ CModel* Cube;
 CModel* Box;
 CModel* Floor;
 CCamera* Camera;
+
+//**** Portal Data ****//
+// Dimensions of portal texture - controls quality of rendered scene in portal
+int PortalWidth = 1024;
+int PortalHeight = 1024;
+
+CModel* Portal;       // The model on which the portal appears
+CCamera* PortalCamera; // The camera view shown in the portal
+
+// The portal texture and the view of it as a render target (see code comments)
+ID3D10Texture2D* PortalTexture = NULL;
+ID3D10RenderTargetView* PortalRenderTarget = NULL;
+ID3D10ShaderResourceView* PortalMap = NULL;
+
+// Also need a depth/stencil buffer for the portal
+// NOTE: ***Can share the depth buffer between multiple portals of the same size***
+ID3D10Texture2D* PortalDepthStencil = NULL;
+ID3D10DepthStencilView* PortalDepthStencilView = NULL;
+
+//*********************//
 
 // Textures - no texture class yet so using DirectX variables
 ID3D10ShaderResourceView* CubeDiffuseMap = NULL;
@@ -64,15 +85,12 @@ ID3D10ShaderResourceView* FloorNormalMap = NULL;
 ID3D10ShaderResourceView* StoneDiffuseMap = NULL;
 
 // Light data - stored manually as there is no light class
-D3DXVECTOR3 AmbientColour = D3DXVECTOR3( 0.2f, 0.2f, 0.2f );
+D3DXVECTOR3 AmbientColour = D3DXVECTOR3( 0.4f, 0.4f, 0.4f );
 float SpecularPower = 256.0f;
 // Display models where the lights are. One of the lights will follow an orbit
 CLight* Light1;
 CLight* Light2;
 CLight* TeapotLights[g_numLights];
-CLight* TeapotLight1;
-CLight* TeapotLight2;
-CLight* TeapotLight3;
 
 CModel* Teapot;
 // Note: There are move & rotation speed constants in Defines.h
@@ -247,9 +265,8 @@ void ReleaseResources()
 	delete Box;
 	delete Camera;
 	delete Teapot;
-	delete TeapotLight1;
-	delete TeapotLight2;
-	delete TeapotLight3;
+	delete Portal;
+	delete PortalCamera;
 
 	for (int i = 0; i < g_numLights; i++) {
 		delete TeapotLights[i];
@@ -267,7 +284,11 @@ void ReleaseResources()
 	if( DepthStencil )     DepthStencil->Release();
 	if( SwapChain )        SwapChain->Release();
 	if( g_pd3dDevice )     g_pd3dDevice->Release();
-
+	if (PortalDepthStencilView) PortalDepthStencilView->Release();
+	if (PortalDepthStencil)     PortalDepthStencil->Release();
+	if (PortalMap)              PortalMap->Release();
+	if (PortalRenderTarget)     PortalRenderTarget->Release();
+	if (PortalTexture)          PortalTexture->Release();
 }
 
 
@@ -320,13 +341,16 @@ bool LoadEffectFile()
 	Light1PosVar = Effect->GetVariableByName("Light1Pos")->AsVector();
 	Light2ColourVar = Effect->GetVariableByName("Light2Colour")->AsVector();
 	Light2PosVar = Effect->GetVariableByName("Light2Pos")->AsVector();
-	TeapotLight1ColourVar = Effect->GetVariableByName("TeapotLight1Colour")->AsVector();
-	TeapotLight1PosVar = Effect->GetVariableByName("TeapotLight1Pos")->AsVector();
-	TeapotLight2ColourVar = Effect->GetVariableByName("TeapotLight2Colour")->AsVector();
-	TeapotLight2PosVar = Effect->GetVariableByName("TeapotLight2Pos")->AsVector();
-	TeapotLight3ColourVar = Effect->GetVariableByName("TeapotLight3Colour")->AsVector();
-	TeapotLight3PosVar = Effect->GetVariableByName("TeapotLight3Pos")->AsVector();
-
+	// Initialize light objects
+	for (int i = 0; i < g_numLights; i++) {
+		TeapotLights[i] = new CLight;
+	}
+	TeapotLights[0]->SetColourVar(Effect->GetVariableByName("TeapotLight1Colour")->AsVector());
+	TeapotLights[0]->SetPosVar(Effect->GetVariableByName("TeapotLight1Pos")->AsVector());
+	TeapotLights[1]->SetColourVar(Effect->GetVariableByName("TeapotLight2Colour")->AsVector());
+	TeapotLights[1]->SetPosVar(Effect->GetVariableByName("TeapotLight2Pos")->AsVector());
+	TeapotLights[2]->SetColourVar(Effect->GetVariableByName("TeapotLight3Colour")->AsVector());
+	TeapotLights[2]->SetPosVar(Effect->GetVariableByName("TeapotLight3Pos")->AsVector());
 	TintColourVar = Effect->GetVariableByName("TintColour")->AsVector();
 	AmbientColourVar = Effect->GetVariableByName("AmbientColour")->AsVector();
 	SpecularPowerVar = Effect->GetVariableByName("SpecularPower")->AsScalar();
@@ -351,6 +375,10 @@ bool InitScene()
 	Camera->SetPosition( D3DXVECTOR3(-15, 20,-40) );
 	Camera->SetRotation( D3DXVECTOR3(ToRadians(13.0f), ToRadians(18.0f), 0.0f) ); // ToRadians is a new helper function to convert degrees to radians
 
+	//**** Portal camera is the view shown in the portal object's texture ****//
+	PortalCamera = new CCamera();
+	PortalCamera->SetPosition(D3DXVECTOR3(50, 15, 100));
+	PortalCamera->SetRotation(D3DXVECTOR3(0, ToRadians(-130.0f), 0.));
 
 	///////////////////////
 	// Load/Create models
@@ -361,9 +389,8 @@ bool InitScene()
 	Light1 = new CLight;
 	Light2 = new CLight;
 	Teapot = new CModel;
-	TeapotLight1 = new CLight;
-	TeapotLight2 = new CLight;
-	TeapotLight3 = new CLight;
+	Portal = new CModel;
+
 
 	// The model class can load ".X" files. It encapsulates (i.e. hides away from this code) the file loading/parsing and creation of vertex/index buffers
 	// We must pass an example technique used for each model. We can then only render models with techniques that uses matching vertex input data
@@ -373,13 +400,11 @@ bool InitScene()
 	if (!Light1->Load( "Light.x", AdditiveTexTintTechnique )) return false;
 	if (!Light2->Load( "Light.x", AdditiveTexTintTechnique)) return false;
 	if (!Teapot->Load( "Teapot.x", VertexLitTechnique )) return false;
-	if (!TeapotLight1->Load("Light.x", AdditiveTexTintTechnique)) return false;
-	if (!TeapotLight2->Load("Light.x", AdditiveTexTintTechnique)) return false;
-	if (!TeapotLight3->Load("Light.x", AdditiveTexTintTechnique)) return false;
 	for (int i = 0; i < g_numLights; i++) {
-		TeapotLights[i] = new CLight;
 		if (!TeapotLights[i]->Load("Light.x", AdditiveTexTintTechnique)) return false;
 	}
+	if (!Portal->Load("Portal.x", AdditiveTexTintTechnique)) return false;
+
 	// Initial positions
 	Cube->SetPosition( D3DXVECTOR3(-20, 5, 0) );
 	Box->SetPosition( D3DXVECTOR3(30, 10, 0) );
@@ -402,6 +427,8 @@ bool InitScene()
 	TeapotLights[2]->SetScale(4.0f);
 	TeapotLights[2]->SetColour(D3DXVECTOR3(0.4f, 0.4f, 0.1f) * 5);
 
+	Portal->SetPosition(D3DXVECTOR3(50, 15, 100));
+	Portal->SetRotation(D3DXVECTOR3(0.0f, ToRadians(-130.0f), 0.0f));
 	//////////////////
 	// Load textures
 
@@ -412,6 +439,63 @@ bool InitScene()
 	if (FAILED(D3DX10CreateShaderResourceViewFromFile(g_pd3dDevice, L"PatternNormal.dds", NULL, NULL, &BoxNormalMap, NULL))) return false;
 	if (FAILED(D3DX10CreateShaderResourceViewFromFile(g_pd3dDevice, L"PatternDiffuseSpecular.dds", NULL, NULL, &BoxDiffuseMap, NULL))) return false;
 	if (FAILED(D3DX10CreateShaderResourceViewFromFile(g_pd3dDevice, L"flare.jpg", NULL, NULL, &LightDiffuseMap, NULL))) return false;
+
+
+	//**** Portal Texture ****//
+
+	// Create the portal texture itself, above we used a D3DX... helper function to create a texture in one line. Here, we need to do things manually
+	// as we are creating a special kind of texture (one that we can render to). Many settings to prepare:
+	D3D10_TEXTURE2D_DESC portalDesc;
+	portalDesc.Width = PortalWidth;  // Size of the portal texture determines its quality
+	portalDesc.Height = PortalHeight;
+	portalDesc.MipLevels = 1; // No mip-maps when rendering to textures (or we would have to render every level)
+	portalDesc.ArraySize = 1;
+	portalDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM; // RGBA texture (8-bits each)
+	portalDesc.SampleDesc.Count = 1;
+	portalDesc.SampleDesc.Quality = 0;
+	portalDesc.Usage = D3D10_USAGE_DEFAULT;
+	portalDesc.BindFlags = D3D10_BIND_RENDER_TARGET | D3D10_BIND_SHADER_RESOURCE; // Indicate we will use texture as render target, and pass it to shaders
+	portalDesc.CPUAccessFlags = 0;
+	portalDesc.MiscFlags = 0;
+	if (FAILED(g_pd3dDevice->CreateTexture2D(&portalDesc, NULL, &PortalTexture))) return false;
+
+	// We created the portal texture above, now we get a "view" of it as a render target, i.e. get a special pointer to the texture that
+	// we use when rendering to it (see RenderScene function below)
+	if (FAILED(g_pd3dDevice->CreateRenderTargetView(PortalTexture, NULL, &PortalRenderTarget))) return false;
+
+	// We also need to send this texture (resource) to the shaders. To do that we must create a shader-resource "view"
+	D3D10_SHADER_RESOURCE_VIEW_DESC srDesc;
+	srDesc.Format = portalDesc.Format;
+	srDesc.ViewDimension = D3D10_SRV_DIMENSION_TEXTURE2D;
+	srDesc.Texture2D.MostDetailedMip = 0;
+	srDesc.Texture2D.MipLevels = 1;
+
+	if (FAILED(g_pd3dDevice->CreateShaderResourceView(PortalTexture, &srDesc, &PortalMap))) return false;
+
+	//**** Portal Depth Buffer ****//
+
+	// We also need a depth buffer to go with our portal
+	//**** This depth buffer can be shared with any other portals of the same size
+	portalDesc.Width = PortalWidth;
+	portalDesc.Height = PortalHeight;
+	portalDesc.MipLevels = 1;
+	portalDesc.ArraySize = 1;
+	portalDesc.Format = DXGI_FORMAT_D32_FLOAT;
+	portalDesc.SampleDesc.Count = 1;
+	portalDesc.SampleDesc.Quality = 0;
+	portalDesc.Usage = D3D10_USAGE_DEFAULT;
+	portalDesc.BindFlags = D3D10_BIND_DEPTH_STENCIL;
+	portalDesc.CPUAccessFlags = 0;
+	portalDesc.MiscFlags = 0;
+	if (FAILED(g_pd3dDevice->CreateTexture2D(&portalDesc, NULL, &PortalDepthStencil))) return false;
+
+	// Create the depth stencil view, i.e. indicate that the texture just created is to be used as a depth buffer
+	D3D10_DEPTH_STENCIL_VIEW_DESC portalDescDSV;
+	portalDescDSV.Format = portalDesc.Format;
+	portalDescDSV.ViewDimension = D3D10_DSV_DIMENSION_TEXTURE2D;
+	portalDescDSV.Texture2D.MipSlice = 0;
+	if (FAILED(g_pd3dDevice->CreateDepthStencilView(PortalDepthStencil, &portalDescDSV, &PortalDepthStencilView))) return false;
+
 
 	return true;
 }
@@ -425,6 +509,10 @@ void UpdateScene( float frameTime )
 	Camera->Control( frameTime, Key_Up, Key_Down, Key_Left, Key_Right, Key_W, Key_S, Key_A, Key_D );
 	Camera->UpdateMatrices();
 	
+	PortalCamera->Control(frameTime, Key_Numpad5, Key_Numpad0, Key_Numpad1, Key_Numpad3, Key_U, Key_O, Key_Period, Key_Comma);
+	PortalCamera->UpdateMatrices();
+	Portal->UpdateMatrix();
+
 	// Control cube position and update its world matrix each frame
 	Cube->Control( frameTime, Key_I, Key_K, Key_J, Key_L, Key_U, Key_O, Key_Period, Key_Comma );
 	Cube->UpdateMatrix();
@@ -462,91 +550,140 @@ void UpdateScene( float frameTime )
 	}
 }
 
-
-// Render everything in the scene
-void RenderScene()
+// Render all the models from the point of view of the given camera
+void RenderModels(CCamera* camera)
 {
 	// Clear the back buffer - before drawing the geometry clear the entire window to a fixed colour
-	float ClearColor[4] = { 0.2f, 0.2f, 0.3f, 1.0f }; // Good idea to match background to ambient colour
-	g_pd3dDevice->ClearRenderTargetView( RenderTargetView, ClearColor );
-	g_pd3dDevice->ClearDepthStencilView( DepthStencilView, D3D10_CLEAR_DEPTH, 1.0f, 0 ); // Clear the depth buffer too
+	g_pd3dDevice->ClearRenderTargetView(RenderTargetView, g_clearColour);
+	g_pd3dDevice->ClearDepthStencilView(DepthStencilView, D3D10_CLEAR_DEPTH, 1.0f, 0); // Clear the depth buffer too
 
-
-	//---------------------------
-	// Common rendering settings
-
-	// Common features for all models, set these once only
 
 	// Pass the camera's matrices to the vertex shader
-	ViewMatrixVar->SetMatrix( (float*)&Camera->GetViewMatrix() );
-	ProjMatrixVar->SetMatrix( (float*)&Camera->GetProjectionMatrix() );
-
-	// Pass light information to the vertex shader
-	Light1PosVar->SetRawValue(Light1->GetPosition(), 0, 12);  // Send 3 floats (12 bytes) from C++ LightPos variable (x,y,z) to shader counterpart (middle parameter is unused) 
-	Light1ColourVar->SetRawValue(Light1->GetColour(), 0, 12);
-	Light2PosVar->SetRawValue(Light2->GetPosition(), 0, 12);
-	Light2ColourVar->SetRawValue(Light2->GetColour(), 0, 12);
-	TeapotLight1PosVar->SetRawValue(TeapotLights[0]->GetPosition(), 0, 12);
-	TeapotLight1ColourVar->SetRawValue(TeapotLights[0]->GetColour(), 0, 12);
-	TeapotLight2PosVar->SetRawValue(TeapotLights[1]->GetPosition(), 0, 12);
-	TeapotLight2ColourVar->SetRawValue(TeapotLights[1]->GetColour(), 0, 12);
-	TeapotLight3PosVar->SetRawValue(TeapotLights[2]->GetPosition(), 0, 12);
-	TeapotLight3ColourVar->SetRawValue(TeapotLights[2]->GetColour(), 0, 12);
-	AmbientColourVar->SetRawValue(AmbientColour, 0, 12);
-	SpecularPowerVar->SetFloat(SpecularPower);
-	// Parallax mapping depth
-	ParallaxDepthVar->SetFloat(g_useParallax ? g_parallaxDepth : 0.0f);
+	ViewMatrixVar->SetMatrix((float*)&camera->GetViewMatrix());
+	ProjMatrixVar->SetMatrix((float*)&camera->GetProjectionMatrix());
 
 	//---------------------------
 	// Render each model
-	
+
 	// Constant colours used for models in initial shaders
-	D3DXVECTOR3 Black( 0.0f, 0.0f, 0.0f );
-	D3DXVECTOR3 Blue( 0.0f, 0.0f, 1.0f );
+	D3DXVECTOR3 Black(0.0f, 0.0f, 0.0f);
+	D3DXVECTOR3 Blue(0.0f, 0.0f, 1.0f);
+
+	// Portal
+	WorldMatrixVar->SetMatrix((float*)Portal->GetWorldMatrix());
+	DiffuseMapVar->SetResource(PortalMap);
+	Portal->Render(VertexLitTechnique);
 
 	// Cube
-	WorldMatrixVar->SetMatrix( (float*)Cube->GetWorldMatrix() );  // Send the cube's world matrix to the shader
-    DiffuseMapVar->SetResource( CubeDiffuseMap );                 // Send the cube's diffuse/specular map to the shader
-	Cube->Render( WiggleTechnique );                         // Pass rendering technique to the model class
+	WorldMatrixVar->SetMatrix((float*)Cube->GetWorldMatrix());  // Send the cube's world matrix to the shader
+	DiffuseMapVar->SetResource(CubeDiffuseMap);                 // Send the cube's diffuse/specular map to the shader
+	Cube->Render(WiggleTechnique);                         // Pass rendering technique to the model class
 
 	// Box
 	WorldMatrixVar->SetMatrix((float*)Box->GetWorldMatrix());
 	DiffuseMapVar->SetResource(BoxDiffuseMap);
 	NormalMapVar->SetResource(BoxNormalMap);
-	Box->Render( NormalMappingTechnique );
+	Box->Render(NormalMappingTechnique);
 
 	// Floor
 	WorldMatrixVar->SetMatrix((float*)Floor->GetWorldMatrix());
 	DiffuseMapVar->SetResource(FloorDiffuseMap);
 	NormalMapVar->SetResource(FloorNormalMap);
-	Floor->Render( NormalMappingTechnique);
+	Floor->Render(NormalMappingTechnique);
 
-	WorldMatrixVar->SetMatrix( (float*)Light1->GetWorldMatrix() );
+	// Light1
+	WorldMatrixVar->SetMatrix((float*)Light1->GetWorldMatrix());
 	DiffuseMapVar->SetResource(LightDiffuseMap);
 	TintColourVar->SetRawValue(Light1->GetColour(), 0, 12);
-	Light1->Render( AdditiveTexTintTechnique );
+	Light1->Render(AdditiveTexTintTechnique);
 
-	WorldMatrixVar->SetMatrix( (float*)Light2->GetWorldMatrix() );
+	// Light2
+	WorldMatrixVar->SetMatrix((float*)Light2->GetWorldMatrix());
 	DiffuseMapVar->SetResource(LightDiffuseMap);
 	TintColourVar->SetRawValue(Light2->GetColour(), 0, 12);
-	Light2->Render( AdditiveTexTintTechnique );
+	Light2->Render(AdditiveTexTintTechnique);
 
-	//---------------------------
-	// Teapot with 3 lights
+	// Teapot
 	WorldMatrixVar->SetMatrix((float*)Teapot->GetWorldMatrix());
 	DiffuseMapVar->SetResource(StoneDiffuseMap);
 	Teapot->Render(VertexLitTechnique);
 
+	// Teapot Lights (3)
 	for (int i = 0; i < g_numLights; i++) {
 		WorldMatrixVar->SetMatrix((float*)TeapotLights[i]->GetWorldMatrix());
 		DiffuseMapVar->SetResource(LightDiffuseMap);
 		TintColourVar->SetRawValue(TeapotLights[i]->GetColour(), 0, 12);
 		TeapotLights[i]->Render(AdditiveTexTintTechnique);
 	}
+}
+
+// Render everything in the scene
+void RenderScene()
+{
+	// Pass light information to the vertex shader
+	Light1PosVar->SetRawValue(Light1->GetPosition(), 0, 12);  // Send 3 floats (12 bytes) from C++ LightPos variable (x,y,z) to shader counterpart (middle parameter is unused) 
+	Light1ColourVar->SetRawValue(Light1->GetColour(), 0, 12);
+	Light2PosVar->SetRawValue(Light2->GetPosition(), 0, 12);
+	Light2ColourVar->SetRawValue(Light2->GetColour(), 0, 12);
+	TeapotLights[0]->GetPosVar()->SetRawValue(TeapotLights[0]->GetPosition(), 0, 12);
+	TeapotLights[0]->GetColourVar()->SetRawValue(TeapotLights[0]->GetColour(), 0, 12);
+	TeapotLights[1]->GetPosVar()->SetRawValue(TeapotLights[1]->GetPosition(), 0, 12);
+	TeapotLights[1]->GetColourVar()->SetRawValue(TeapotLights[1]->GetColour(), 0, 12);
+	TeapotLights[2]->GetPosVar()->SetRawValue(TeapotLights[2]->GetPosition(), 0, 12);
+	TeapotLights[2]->GetColourVar()->SetRawValue(TeapotLights[2]->GetColour(), 0, 12);
+	AmbientColourVar->SetRawValue(AmbientColour, 0, 12);
+	SpecularPowerVar->SetFloat(SpecularPower);
+	// Parallax mapping depth
+	ParallaxDepthVar->SetFloat(g_useParallax ? g_parallaxDepth : 0.0f);
+	
+	//---------------------------
+	// Render portal scene
+
+	// Setup the viewport - defines which part of the texture we will render to (usually all of it)
+	D3D10_VIEWPORT vp;
+	vp.Width = PortalWidth;
+	vp.Height = PortalHeight;
+	vp.MinDepth = 0.0f;
+	vp.MaxDepth = 1.0f;
+	vp.TopLeftX = 0;
+	vp.TopLeftY = 0;
+	g_pd3dDevice->RSSetViewports(1, &vp);
+
+	// Select the portal texture to use for rendering, will share the depth/stencil buffer with the backbuffer though
+	g_pd3dDevice->OMSetRenderTargets(1, &PortalRenderTarget, PortalDepthStencilView);
+
+	// Clear the back buffer - before drawing the geometry clear the entire window to a fixed colour
+	g_pd3dDevice->ClearRenderTargetView(PortalRenderTarget, g_clearColour);
+	g_pd3dDevice->ClearDepthStencilView(PortalDepthStencilView, D3D10_CLEAR_DEPTH, 1.0f, 0); // Clear the depth buffer too
+
+	// Render everything from the portal camera's point of view (into the portal render target [texture] set above)
+	RenderModels(PortalCamera);
+
+	//---------------------------
+	// Render main scene
+
+	// Setup the viewport - defines which part of the back-buffer we will render to (usually all of it)
+	vp.Width = g_ViewportWidth;
+	vp.Height = g_ViewportHeight;
+	vp.MinDepth = 0.0f;
+	vp.MaxDepth = 1.0f;
+	vp.TopLeftX = 0;
+	vp.TopLeftY = 0;
+	g_pd3dDevice->RSSetViewports(1, &vp);
+
+	// Select the back buffer and depth buffer to use for rendering
+	g_pd3dDevice->OMSetRenderTargets(1, &RenderTargetView, DepthStencilView);
+
+	// Clear the back buffer  and its depth buffer
+	g_pd3dDevice->ClearRenderTargetView(RenderTargetView, g_clearColour);
+	g_pd3dDevice->ClearDepthStencilView(DepthStencilView, D3D10_CLEAR_DEPTH, 1.0f, 0);
+
+	// Render everything from the main camera's point of view (into the portal render target [texture] set above)
+	RenderModels(Camera);
 
 	//---------------------------
 	// Display the Scene
 
 	// After we've finished drawing to the off-screen back buffer, we "present" it to the front buffer (the screen)
-	SwapChain->Present( 0, 0 );
+	SwapChain->Present(0, 0);
 }
