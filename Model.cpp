@@ -9,6 +9,7 @@
 #include "Model.h"   // Declaration of this class
 
 #include "CImportXFile.h"    // Class to load meshes (taken from a full graphics engine)
+using namespace gen;
 
 ///////////////////////////////
 // Constructors / Destructors
@@ -250,6 +251,12 @@ void CModel::Control( float frameTime, EKeyCode turnUp, EKeyCode turnDown, EKeyC
 		m_Position.y -= m_WorldMatrix._32 * MoveSpeed * frameTime;
 		m_Position.z -= m_WorldMatrix._33 * MoveSpeed * frameTime;
 	}
+}
+
+void CModel::FacePoint(D3DXVECTOR3 point) {
+	CMatrix4x4 facingMatrix = MatrixFaceTarget(CVector3(m_Position), CVector3(point));
+	facingMatrix.DecomposeAffineEuler((CVector3*)&m_Position, (CVector3*)&m_Rotation, 0);
+
 }
 
 

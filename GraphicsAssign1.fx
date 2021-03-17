@@ -74,16 +74,26 @@ float Wiggle;
 
 // Lighting variables
 float3 CameraPos;
-float3 Light1Pos;
-float3 Light1Colour;
-float3 Light2Pos;
-float3 Light2Colour;
+float3 CubeLightPos;
+float3 CubeLightColour;
 float3 TeapotLight1Pos;
 float3 TeapotLight1Colour;
 float3 TeapotLight2Pos;
 float3 TeapotLight2Colour;
 float3 TeapotLight3Pos;
 float3 TeapotLight3Colour;
+float3   SpotLight1Pos;
+float3   SpotLight2Pos;
+float3   SpotLight1Facing;
+float3   SpotLight2Facing;
+float4x4 SpotLight1ViewMatrix;
+float4x4 SpotLight2ViewMatrix;
+float4x4 SpotLight1ProjMatrix;
+float4x4 SpotLight2ProjMatrix;
+float    SpotLight1CosHalfAngle;
+float    SpotLight2CosHalfAngle;
+float3   SpotLight1Colour;
+float3   SpotLight2Colour;
 
 float3 TintColour;
 float3 AmbientColour;
@@ -94,6 +104,8 @@ float ParallaxDepth;
 Texture2D DiffuseMap;
 
 Texture2D NormalMap;
+Texture2D ShadowMap1;
+Texture2D ShadowMap2;
 
 // Sampler to use with the diffuse/normal maps. Specifies texture filtering and addressing mode to use when accessing texture pixels
 SamplerState TrilinearWrap
@@ -101,6 +113,12 @@ SamplerState TrilinearWrap
 	Filter = MIN_MAG_MIP_LINEAR;
 	AddressU = Wrap;
 	AddressV = Wrap;
+};
+SamplerState PointClamp
+{
+	Filter = MIN_MAG_MIP_POINT;
+	AddressU = Clamp;
+	AddressV = Clamp;
 };
 
 //--------------------------------------------------------------------------------------
@@ -313,20 +331,12 @@ float4 NormalMapLighting(VS_NORMALMAP_OUTPUT vOut) : SV_Target
 	///////////////////////
 	// Calculate lighting
 
-	//// LIGHT 1
-	float3 Light1Dir = normalize(Light1Pos - vOut.WorldPos.xyz);   // Direction for each light is different
-	float3 Light1Dist = length(Light1Pos - vOut.WorldPos.xyz);
-	float3 DiffuseLight1 = Light1Colour * max(dot(worldNormal.xyz, Light1Dir), 0) / Light1Dist;
+	//// CUBE LIGHT
+	float3 Light1Dir = normalize(CubeLightPos - vOut.WorldPos.xyz);   // Direction for each light is different
+	float3 Light1Dist = length(CubeLightPos - vOut.WorldPos.xyz);
+	float3 DiffuseLight1 = CubeLightColour * max(dot(worldNormal.xyz, Light1Dir), 0) / Light1Dist;
 	float3 halfway = normalize(Light1Dir + CameraDir);
 	float3 SpecularLight1 = DiffuseLight1 * pow(max(dot(worldNormal.xyz, halfway), 0), SpecularPower);
-
-	//// LIGHT 2
-	float3 Light2Dir = normalize(Light2Pos - vOut.WorldPos.xyz);
-	float3 Light2Dist = length(Light2Pos - vOut.WorldPos.xyz);
-	float3 DiffuseLight2 = Light2Colour * max(dot(worldNormal.xyz, Light2Dir), 0) / Light2Dist;
-	halfway = normalize(Light2Dir + CameraDir);
-	float3 SpecularLight2 = DiffuseLight2 * pow(max(dot(worldNormal.xyz, halfway), 0), SpecularPower);
-
 
 	//// TEAPOT LIGHT 1
 	Light1Dir = normalize(TeapotLight1Pos - vOut.WorldPos.xyz);   // Direction for each light is different
@@ -336,8 +346,8 @@ float4 NormalMapLighting(VS_NORMALMAP_OUTPUT vOut) : SV_Target
 	float3 TeapotSpecularLight1 = TeapotDiffuseLight1 * pow(saturate(dot(worldNormal.xyz, halfway)), SpecularPower);
 
 	//// TEAPOT LIGHT 2
-	Light2Dir = normalize(TeapotLight2Pos - vOut.WorldPos.xyz);
-	Light2Dist = length(TeapotLight2Pos - vOut.WorldPos.xyz);
+	float3 Light2Dir = normalize(TeapotLight2Pos - vOut.WorldPos.xyz);
+	float3 Light2Dist = length(TeapotLight2Pos - vOut.WorldPos.xyz);
 	float3 TeapotDiffuseLight2 = TeapotLight2Colour * saturate(dot(worldNormal.xyz, Light2Dir)) / Light2Dist;
 	halfway = normalize(Light2Dir + CameraDir);
 	float3 TeapotSpecularLight2 = TeapotDiffuseLight2 * pow(saturate(dot(worldNormal.xyz, halfway)), SpecularPower);
@@ -350,9 +360,89 @@ float4 NormalMapLighting(VS_NORMALMAP_OUTPUT vOut) : SV_Target
 	halfway = normalize(Light3Dir + CameraDir);
 	float3 TeapotSpecularLight3 = TeapotDiffuseLight3 * pow(saturate(dot(worldNormal.xyz, halfway)), SpecularPower);
 	
+
+	//// SPOT LIGHT 1
+	// Slight adjustment to calculated depth of pixels so they don't shadow themselves
+	const float DepthAdjust = 0.0005f;
+
+	// Start with no light contribution from this light
+	float3 DiffuseSpotLight1 = 0;
+	float3 SpecularSpotLight1 = 0;
+
+	// Using the world position of the current pixel and the matrices of the light (as a camera), find the 2D position of the
+	// pixel *as seen from the light*. Will use this to find which part of the shadow map to look at.
+	// The usual view / projection matrix multiplies as we would see in a vertex shader (can improve performance by putting these lines in vertex shader)
+	float4 light1ViewPos = mul(float4(vOut.WorldPos, 1.0f), SpotLight1ViewMatrix);
+	float4 light1ProjPos = mul(light1ViewPos, SpotLight1ProjMatrix);
+
+	// Get direction from pixel to light
+	Light1Dir = normalize(SpotLight1Pos - vOut.WorldPos.xyz);
+
+	// Check if pixel is within light cone
+	if (dot(SpotLight1Facing, -Light1Dir) > SpotLight1CosHalfAngle) //**** This condition needs to be written as the first exercise to get spotlights working
+	{
+		// Convert 2D pixel position as viewed from light into texture coordinates for shadow map - an advanced topic related to the projection step
+		// Detail: 2D position x & y get perspective divide, then converted from range -1->1 to UV range 0->1. Also flip V axis
+		float2 shadowUV = 0.5f * light1ProjPos.xy / light1ProjPos.w + float2(0.5f, 0.5f);
+		shadowUV.y = 1.0f - shadowUV.y;
+
+		// Get depth of this pixel if it were visible from the light (another advanced projection step)
+		float depthFromLight = light1ProjPos.z / light1ProjPos.w - DepthAdjust; //*** Adjustment so polygons don't shadow themselves
+
+		// Compare pixel depth from light with depth held in shadow map of the light. If shadow map depth is less than something is nearer
+		// to the light than this pixel - so the pixel gets no effect from this light
+		if (depthFromLight < ShadowMap1.Sample(PointClamp, shadowUV).r)
+		{
+			// Remainder of standard per-pixel lighting code is unchanged
+			float3 light1Dist = length(SpotLight1Pos - vOut.WorldPos.xyz);
+			DiffuseSpotLight1 = SpotLight1Colour * max(dot(worldNormal.xyz, Light1Dir), 0) / light1Dist;
+			float3 halfway = normalize(Light1Dir + CameraDir);
+			SpecularSpotLight1 = DiffuseSpotLight1 * pow(max(dot(worldNormal.xyz, halfway), 0), SpecularPower);
+		}
+	}
+
+
+	//// SPOT LIGHT 2
+
+	float3 DiffuseSpotLight2 = 0;
+	float3 SpecularSpotLight2 = 0;
+
+	// Using the world position of the current pixel and the matrices of the light (as a camera), find the 2D position of the
+	// pixel *as seen from the light*. Will use this to find which part of the shadow map to look at.
+	// The usual view / projection matrix multiplies as we would see in a vertex shader (can improve performance by putting these lines in vertex shader)
+	float4 Light2ViewPos = mul(float4(vOut.WorldPos, 1.0f), SpotLight2ViewMatrix);
+	float4 Light2ProjPos = mul(Light2ViewPos, SpotLight2ProjMatrix);
+
+	// Get direction from pixel to light
+	Light2Dir = normalize(SpotLight2Pos - vOut.WorldPos.xyz);
+
+
+	// Check if pixel is within light cone
+	if (dot(SpotLight2Facing, -Light2Dir) > SpotLight2CosHalfAngle) //**** This condition needs to be written as the first exercise to get spotlights working
+	{
+		// Convert 2D pixel position as viewed from light into texture coordinates for shadow map - an advanced topic related to the projection step
+		// Detail: 2D position x & y get perspective divide, then converted from range -1->1 to UV range 0->1. Also flip V axis
+		float2 shadowUV = 0.5f * Light2ProjPos.xy / Light2ProjPos.w + float2(0.5f, 0.5f);
+		shadowUV.y = 1.0f - shadowUV.y;
+
+		// Get depth of this pixel if it were visible from the light (another advanced projection step)
+		float depthFromLight = Light2ProjPos.z / Light2ProjPos.w - DepthAdjust; //*** Adjustment so polygons don't shadow themselves
+
+		// Compare pixel depth from light with depth held in shadow map of the light. If shadow map depth is less than something is nearer
+		// to the light than this pixel - so the pixel gets no effect from this light
+		if (depthFromLight < ShadowMap2.Sample(PointClamp, shadowUV).r)
+		{
+			// Remainder of standard per-pixel lighting code is unchanged
+			float3 Light2Dist = length(SpotLight2Pos - vOut.WorldPos.xyz);
+			DiffuseSpotLight2 = SpotLight2Colour * max(dot(worldNormal.xyz, Light2Dir), 0) / Light2Dist;
+			float3 halfway = normalize(Light2Dir + CameraDir);
+			SpecularSpotLight2 = DiffuseSpotLight2 * pow(max(dot(worldNormal.xyz, halfway), 0), SpecularPower);
+		}
+	}
+
 	// Sum the effect of all lights - add the ambient at this stage rather than for each light (or we will get twice the ambient level)
-	float3 DiffuseLight = AmbientColour + DiffuseLight1 + DiffuseLight2 + TeapotDiffuseLight1 + TeapotDiffuseLight2 + TeapotDiffuseLight3;
-	float3 SpecularLight = SpecularLight1 + SpecularLight2 + TeapotSpecularLight1 + TeapotSpecularLight2 + TeapotSpecularLight3;
+	float3 DiffuseLight = AmbientColour + DiffuseLight1 + TeapotDiffuseLight1 + TeapotDiffuseLight2 + TeapotDiffuseLight3 + DiffuseSpotLight1 + DiffuseSpotLight2;
+	float3 SpecularLight = SpecularLight1 +  TeapotSpecularLight1 + TeapotSpecularLight2 + TeapotSpecularLight3 + SpecularSpotLight1 + SpecularSpotLight2;
 
 
 	////////////////////
@@ -375,6 +465,138 @@ float4 NormalMapLighting(VS_NORMALMAP_OUTPUT vOut) : SV_Target
 
 	return combinedColour;
 }
+
+float4 ShadowMapTex( VS_LIGHTING_OUTPUT vOut ) : SV_Target  // The ": SV_Target" bit just indicates that the returned float4 colour goes to the render target (i.e. it's a colour to render)
+{
+	// Slight adjustment to calculated depth of pixels so they don't shadow themselves
+	const float DepthAdjust = 0.0005f;
+
+	// Can't guarantee the normals are length 1 now (because the world matrix may contain scaling), so renormalise
+	// If lighting in the pixel shader, this is also because the interpolation from vertex shader to pixel shader will also rescale normals
+	float3 worldNormal = normalize(vOut.WorldNormal); 
+
+	///////////////////////
+	// Calculate lighting
+
+	// Calculate direction of camera
+	float3 cameraDir = normalize(CameraPos - vOut.WorldPos.xyz); // Position of camera - position of current vertex (or pixel) (in world space)
+
+	//----------
+	// LIGHT 1
+
+	// Start with no light contribution from this light
+	float3 diffuseLight1 = 0;
+	float3 specularLight1 = 0;
+
+	// Using the world position of the current pixel and the matrices of the light (as a camera), find the 2D position of the
+	// pixel *as seen from the light*. Will use this to find which part of the shadow map to look at.
+	// The usual view / projection matrix multiplies as we would see in a vertex shader (can improve performance by putting these lines in vertex shader)
+	float4 light1ViewPos = mul( float4(vOut.WorldPos), SpotLight1ViewMatrix ); 
+	float4 light1ProjPos = mul( light1ViewPos, SpotLight1ProjMatrix );
+
+	// Get direction from pixel to light
+	float3 light1Dir = normalize(SpotLight1Pos - vOut.WorldPos.xyz);
+
+
+	// Check if pixel is within light cone
+	if ( dot(SpotLight1Facing, -light1Dir ) > SpotLight1CosHalfAngle) //**** This condition needs to be written as the first exercise to get spotlights working
+	{
+		// Convert 2D pixel position as viewed from light into texture coordinates for shadow map - an advanced topic related to the projection step
+		// Detail: 2D position x & y get perspective divide, then converted from range -1->1 to UV range 0->1. Also flip V axis
+		float2 shadowUV = 0.5f * light1ProjPos.xy / light1ProjPos.w + float2( 0.5f, 0.5f );
+		shadowUV.y = 1.0f - shadowUV.y;
+
+		// Get depth of this pixel if it were visible from the light (another advanced projection step)
+		float depthFromLight = light1ProjPos.z / light1ProjPos.w - DepthAdjust; //*** Adjustment so polygons don't shadow themselves
+		
+		// Compare pixel depth from light with depth held in shadow map of the light. If shadow map depth is less than something is nearer
+		// to the light than this pixel - so the pixel gets no effect from this light
+		if (depthFromLight < ShadowMap1.Sample( PointClamp, shadowUV ).r)
+		{
+			// Remainder of standard per-pixel lighting code is unchanged
+			float3 light1Dist = length(SpotLight1Pos - vOut.WorldPos.xyz); 
+			diffuseLight1 = SpotLight1Colour * max( dot(worldNormal.xyz, light1Dir), 0 ) / light1Dist;
+			float3 halfway = normalize(light1Dir + cameraDir);
+			specularLight1 = diffuseLight1 * pow( max( dot(worldNormal.xyz, halfway), 0 ), SpecularPower );
+		}
+	}
+
+
+	//----------
+	// LIGHT 2
+
+	// Start with no light contribution from this light
+	float3 diffuseLight2 = 0;
+	float3 specularLight2 = 0;
+
+	// Using the world position of the current pixel and the matrices of the light (as a camera), find the 2D position of the
+	// pixel *as seen from the light*. Will use this to find which part of the shadow map to look at.
+	// The usual view / projection matrix multiplies as we would see in a vertex shader (can improve performance by putting these lines in vertex shader)
+	float4 Light2ViewPos = mul(float4(vOut.WorldPos), SpotLight2ViewMatrix);
+	float4 Light2ProjPos = mul(Light2ViewPos, SpotLight2ProjMatrix);
+
+	// Get direction from pixel to light
+	float3 Light2Dir = normalize(SpotLight2Pos - vOut.WorldPos.xyz);
+
+
+	// Check if pixel is within light cone
+	if (dot(SpotLight2Facing, -Light2Dir) > SpotLight2CosHalfAngle) //**** This condition needs to be written as the first exercise to get spotlights working
+	{
+		// Convert 2D pixel position as viewed from light into texture coordinates for shadow map - an advanced topic related to the projection step
+		// Detail: 2D position x & y get perspective divide, then converted from range -1->1 to UV range 0->1. Also flip V axis
+		float2 shadowUV = 0.5f * Light2ProjPos.xy / Light2ProjPos.w + float2(0.5f, 0.5f);
+		shadowUV.y = 1.0f - shadowUV.y;
+
+		// Get depth of this pixel if it were visible from the light (another advanced projection step)
+		float depthFromLight = Light2ProjPos.z / Light2ProjPos.w - DepthAdjust; //*** Adjustment so polygons don't shadow themselves
+
+		// Compare pixel depth from light with depth held in shadow map of the light. If shadow map depth is less than something is nearer
+		// to the light than this pixel - so the pixel gets no effect from this light
+		if (depthFromLight < ShadowMap2.Sample(PointClamp, shadowUV).r)
+		{
+			// Remainder of standard per-pixel lighting code is unchanged
+			float3 Light2Dist = length(SpotLight2Pos - vOut.WorldPos.xyz);
+			diffuseLight2 = SpotLight2Colour * max(dot(worldNormal.xyz, Light2Dir), 0) / Light2Dist;
+			float3 halfway = normalize(Light2Dir + cameraDir);
+			specularLight2 = diffuseLight2 * pow(max(dot(worldNormal.xyz, halfway), 0), SpecularPower);
+		}
+	}
+
+	// Sum the effect of the two lights - add the ambient at this stage rather than for each light (or we will get twice the ambient level)
+	float3 diffuseLight = AmbientColour + diffuseLight1 + diffuseLight2;
+	float3 specularLight = specularLight1 + specularLight2;
+
+
+	////////////////////
+	// Sample texture
+
+	// Extract diffuse material colour for this pixel from a texture
+	float4 diffuseMaterial = DiffuseMap.Sample( TrilinearWrap, vOut.UV );
+	
+	// Get specular material colour from texture alpha
+	float3 specularMaterial = diffuseMaterial.a;
+
+	
+	////////////////////
+	// Combine colours 
+	
+	// Combine maps and lighting for final pixel colour
+	float4 combinedColour;
+	combinedColour.rgb = diffuseMaterial * (diffuseLight + diffuseLight2)+ specularMaterial * (specularLight + specularLight2);
+	combinedColour.a = 1.0f; // No alpha processing in this shader, so just set it to 1
+
+	return combinedColour;
+}
+
+// Shader used when rendering the shadow map depths. In fact a pixel shader isn't needed, we are
+// only writing to the depth buffer. However, needed to display what's in a shadow map (which we
+// do as one of the exercises).
+float4 PixelDepth(VS_BASIC_OUTPUT vOut) : SV_Target
+{
+	// Output the value that would go in the depth puffer to the pixel colour (greyscale)
+	return vOut.ProjPos.z / vOut.ProjPos.w;
+}
+
 
 //--------------------------------------------------------------------------------------
 // States
@@ -495,6 +717,37 @@ technique10 NormalMapping
 		SetVertexShader(CompileShader(vs_4_0, NormalMapTransform()));
 		SetGeometryShader(NULL);
 		SetPixelShader(CompileShader(ps_4_0, NormalMapLighting()));
+
+		// Switch off blending states
+		SetBlendState(NoBlending, float4(0.0f, 0.0f, 0.0f, 0.0f), 0xFFFFFFFF);
+		SetRasterizerState(CullBack);
+		SetDepthStencilState(DepthWritesOn, 0);
+	}
+}
+
+technique10 ShadowMappingTechnique
+{
+	pass P0
+	{
+		SetVertexShader(CompileShader(vs_4_0, VertexLightingTex()));
+		SetGeometryShader(NULL);
+		SetPixelShader(CompileShader(ps_4_0, ShadowMapTex()));
+
+		// Switch off blending states
+		SetBlendState(NoBlending, float4(0.0f, 0.0f, 0.0f, 0.0f), 0xFFFFFFFF);
+		SetRasterizerState(CullBack);
+		SetDepthStencilState(DepthWritesOn, 0);
+	}
+}
+
+// Rendering a shadow map. Only outputs the depth of each pixel
+technique10 DepthOnlyTechnique
+{
+	pass P0
+	{
+		SetVertexShader(CompileShader(vs_4_0, BasicTransform()));
+		SetGeometryShader(NULL);
+		SetPixelShader(CompileShader(ps_4_0, PixelDepth()));
 
 		// Switch off blending states
 		SetBlendState(NoBlending, float4(0.0f, 0.0f, 0.0f, 0.0f), 0xFFFFFFFF);

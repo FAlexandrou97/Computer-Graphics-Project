@@ -150,6 +150,8 @@ public:
 	void Control( float frameTime, EKeyCode turnUp, EKeyCode turnDown, EKeyCode turnLeft, EKeyCode turnRight,  
 				  EKeyCode turnCW, EKeyCode turnCCW, EKeyCode moveForward, EKeyCode moveBackward );
 
+	void CModel::FacePoint(D3DXVECTOR3 point);
+
 	// Render the model with the given technique. Assumes any shader variables for the technique have already been set up (e.g. matrices and textures)
 	void Render( ID3D10EffectTechnique* technique );
 };

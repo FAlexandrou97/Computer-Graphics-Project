@@ -42,7 +42,8 @@
 // Global Scene Variables
 //--------------------------------------------------------------------------------------
 float g_WiggleVar;
-const int g_numLights = 3;
+const int g_numTeapotLights = 3;
+const int g_numSpotLights = 2;
 float g_parallaxDepth = 0.05f; // Overall depth of bumpiness for parallax mapping
 bool g_useParallax = false;  // Toggle for parallax 
 float g_clearColour[4] = { 0.2f, 0.2f, 0.3f, 1.0f }; // Good idea to match background to ambient colour
@@ -50,9 +51,10 @@ float g_clearColour[4] = { 0.2f, 0.2f, 0.3f, 1.0f }; // Good idea to match backg
 // Models and cameras encapsulated in classes for flexibity and convenience
 // The CModel class collects together geometry and world matrix, and provides functions to control the model and render it
 // The CCamera class handles the view and projections matrice, and provides functions to control the camera
-CModel* Cube;
+CModel* WiggleCube;
 CModel* Box;
 CModel* Floor;
+CModel* Troll;
 CCamera* Camera;
 
 //**** Portal Data ****//
@@ -75,6 +77,23 @@ ID3D10DepthStencilView* PortalDepthStencilView = NULL;
 
 //*********************//
 
+
+//**** Shadow Maps ****//
+// Very similar data to the render-to-texture (portal) lab
+
+// Width and height of shadow map - controls resolution/quality of shadows
+int ShadowMapSize = 1024;
+
+// The shadow map textures and the view of it as a depth buffer and shader resource (see code comments)
+ID3D10Texture2D* ShadowMap1Texture = NULL;
+ID3D10DepthStencilView* ShadowMap1DepthView = NULL;
+ID3D10ShaderResourceView* ShadowMap1 = NULL;
+ID3D10Texture2D* ShadowMap2Texture = NULL;
+ID3D10DepthStencilView* ShadowMap2DepthView = NULL;
+ID3D10ShaderResourceView* ShadowMap2 = NULL;
+
+//*********************//
+
 // Textures - no texture class yet so using DirectX variables
 ID3D10ShaderResourceView* CubeDiffuseMap = NULL;
 ID3D10ShaderResourceView* LightDiffuseMap = NULL;
@@ -83,14 +102,15 @@ ID3D10ShaderResourceView* BoxNormalMap = NULL;
 ID3D10ShaderResourceView* FloorDiffuseMap = NULL;
 ID3D10ShaderResourceView* FloorNormalMap = NULL;
 ID3D10ShaderResourceView* StoneDiffuseMap = NULL;
+ID3D10ShaderResourceView* TrollDiffuseMap = NULL;
 
 // Light data - stored manually as there is no light class
-D3DXVECTOR3 AmbientColour = D3DXVECTOR3( 0.4f, 0.4f, 0.4f );
+D3DXVECTOR3 AmbientColour = D3DXVECTOR3( 0.2f, 0.2f, 0.2f );
 float SpecularPower = 256.0f;
 // Display models where the lights are. One of the lights will follow an orbit
-CLight* Light1;
-CLight* Light2;
-CLight* TeapotLights[g_numLights];
+CLight* CubeLight;
+CLight* TeapotLights[g_numTeapotLights];
+CLight* SpotLights[g_numSpotLights];
 
 CModel* Teapot;
 // Note: There are move & rotation speed constants in Defines.h
@@ -108,6 +128,8 @@ ID3D10EffectTechnique* WiggleTechnique = NULL;
 ID3D10EffectTechnique* VertexLitTechnique = NULL;
 ID3D10EffectTechnique* AdditiveTexTintTechnique = NULL;
 ID3D10EffectTechnique* NormalMappingTechnique = NULL;
+ID3D10EffectTechnique* ShadowMappingTechnique = NULL;
+ID3D10EffectTechnique* DepthOnlyTechnique = NULL;
 
 // Matrices
 ID3D10EffectMatrixVariable* WorldMatrixVar = NULL;
@@ -119,23 +141,15 @@ ID3D10EffectScalarVariable* g_pCubeWiggleVar = NULL;
 // Textures
 ID3D10EffectShaderResourceVariable* DiffuseMapVar = NULL;
 ID3D10EffectShaderResourceVariable* NormalMapVar = NULL;
+ID3D10EffectShaderResourceVariable* ShadowMap1Var = NULL;
+ID3D10EffectShaderResourceVariable* ShadowMap2Var = NULL; 
+
 
 // Miscellaneous
 ID3D10EffectVectorVariable* ModelColourVar = NULL;
 ID3D10EffectScalarVariable* ParallaxDepthVar = NULL;
 
 // Light Effect Variables
-ID3D10EffectVectorVariable* Light1PosVar = NULL;
-ID3D10EffectVectorVariable* Light1ColourVar = NULL;
-ID3D10EffectVectorVariable* Light2PosVar = NULL;
-ID3D10EffectVectorVariable* Light2ColourVar = NULL;
-ID3D10EffectVectorVariable* TeapotLight1PosVar = NULL;
-ID3D10EffectVectorVariable* TeapotLight1ColourVar = NULL;
-ID3D10EffectVectorVariable* TeapotLight2PosVar = NULL;
-ID3D10EffectVectorVariable* TeapotLight2ColourVar = NULL;
-ID3D10EffectVectorVariable* TeapotLight3PosVar = NULL;
-ID3D10EffectVectorVariable* TeapotLight3ColourVar = NULL;
-
 ID3D10EffectVectorVariable* TintColourVar = NULL;
 ID3D10EffectVectorVariable* AmbientColourVar = NULL;
 ID3D10EffectScalarVariable* SpecularPowerVar = NULL;
@@ -258,18 +272,20 @@ void ReleaseResources()
 	// Test each variable to see if it exists before deletion
 	if( g_pd3dDevice )     g_pd3dDevice->ClearState();
 
-	delete Light2;
-	delete Light1;
+	delete CubeLight;
 	delete Floor;
-	delete Cube;
+	delete WiggleCube;
 	delete Box;
 	delete Camera;
 	delete Teapot;
 	delete Portal;
 	delete PortalCamera;
-
-	for (int i = 0; i < g_numLights; i++) {
+	delete Troll;
+	for (int i = 0; i < g_numTeapotLights; i++) {
 		delete TeapotLights[i];
+	}
+	for (int i = 0; i < g_numSpotLights; i++) {
+		delete SpotLights[i];
 	}
 
     if( FloorDiffuseMap )  FloorDiffuseMap->Release();
@@ -278,6 +294,7 @@ void ReleaseResources()
     if( BoxDiffuseMap )    BoxDiffuseMap->Release();
     if( BoxNormalMap )     BoxNormalMap->Release();
     if( StoneDiffuseMap )  StoneDiffuseMap->Release();
+	if (TrollDiffuseMap)   TrollDiffuseMap->Release();
 	if( Effect )           Effect->Release();
 	if( DepthStencilView ) DepthStencilView->Release();
 	if( RenderTargetView ) RenderTargetView->Release();
@@ -289,6 +306,12 @@ void ReleaseResources()
 	if (PortalMap)              PortalMap->Release();
 	if (PortalRenderTarget)     PortalRenderTarget->Release();
 	if (PortalTexture)          PortalTexture->Release();
+	if (ShadowMap1)             ShadowMap1->Release();
+	if (ShadowMap1DepthView)    ShadowMap1DepthView->Release();
+	if (ShadowMap1Texture)      ShadowMap1Texture->Release();
+	if (ShadowMap2)             ShadowMap2->Release();
+	if (ShadowMap2DepthView)    ShadowMap2DepthView->Release();
+	if (ShadowMap2Texture)      ShadowMap2Texture->Release();
 }
 
 
@@ -321,6 +344,8 @@ bool LoadEffectFile()
 	VertexLitTechnique = Effect->GetTechniqueByName("VertexLitTechnique");
 	AdditiveTexTintTechnique = Effect->GetTechniqueByName("AdditiveTexTint");
 	NormalMappingTechnique = Effect->GetTechniqueByName("NormalMapping");
+	ShadowMappingTechnique = Effect->GetTechniqueByName("ShadowMappingTechnique");
+	DepthOnlyTechnique = Effect->GetTechniqueByName("DepthOnlyTechnique");
 
 	// Create special variables to allow us to access global variables in the shaders from C++
 	WorldMatrixVar    = Effect->GetVariableByName( "WorldMatrix" )->AsMatrix();
@@ -331,26 +356,46 @@ bool LoadEffectFile()
 	// Only difference is that this variable is a "Shader Resource"
 	DiffuseMapVar = Effect->GetVariableByName( "DiffuseMap" )->AsShaderResource();
 	NormalMapVar  = Effect->GetVariableByName("NormalMap")->AsShaderResource();
+	ShadowMap1Var = Effect->GetVariableByName("ShadowMap1")->AsShaderResource();
+	ShadowMap2Var = Effect->GetVariableByName("ShadowMap2")->AsShaderResource();
 
 	// Other shader variables
 	ModelColourVar = Effect->GetVariableByName( "ModelColour"  )->AsVector();
 	g_pCubeWiggleVar = Effect->GetVariableByName("Wiggle")->AsScalar();
 
 	// Access shader variables needed for lighting
-	Light1ColourVar = Effect->GetVariableByName("Light1Colour")->AsVector();
-	Light1PosVar = Effect->GetVariableByName("Light1Pos")->AsVector();
-	Light2ColourVar = Effect->GetVariableByName("Light2Colour")->AsVector();
-	Light2PosVar = Effect->GetVariableByName("Light2Pos")->AsVector();
+	
 	// Initialize light objects
-	for (int i = 0; i < g_numLights; i++) {
+	CubeLight = new CLight;
+	for (int i = 0; i < g_numTeapotLights; i++) {
 		TeapotLights[i] = new CLight;
 	}
+	for (int i = 0; i < g_numSpotLights; i++) {
+		SpotLights[i] = new CLight;
+	}
+	CubeLight->SetColourVar(Effect->GetVariableByName("CubeLightColour")->AsVector());
+	CubeLight->SetPosVar(Effect->GetVariableByName("CubeLightPos")->AsVector());
+
+	SpotLights[0]->SetColourVar(Effect->GetVariableByName("SpotLight1Colour")->AsVector());
+	SpotLights[0]->SetPosVar(Effect->GetVariableByName("SpotLight1Pos")->AsVector());
+	SpotLights[0]->SetFacingVar(Effect->GetVariableByName("SpotLight1Facing")->AsVector());
+	SpotLights[0]->SetViewMatrixVar(Effect->GetVariableByName("SpotLight1ViewMatrix")->AsMatrix());
+	SpotLights[0]->SetProjMatrixVar(Effect->GetVariableByName("SpotLight1ProjMatrix")->AsMatrix());
+	SpotLights[0]->SetConeAngleVar(Effect->GetVariableByName("SpotLight1CosHalfAngle")->AsScalar());
+	SpotLights[1]->SetColourVar(Effect->GetVariableByName("SpotLight2Colour")->AsVector());
+	SpotLights[1]->SetPosVar(Effect->GetVariableByName("SpotLight2Pos")->AsVector());
+	SpotLights[1]->SetFacingVar(Effect->GetVariableByName("SpotLight2Facing")->AsVector());
+	SpotLights[1]->SetViewMatrixVar(Effect->GetVariableByName("SpotLight2ViewMatrix")->AsMatrix());
+	SpotLights[1]->SetProjMatrixVar(Effect->GetVariableByName("SpotLight2ProjMatrix")->AsMatrix());
+	SpotLights[1]->SetConeAngleVar(Effect->GetVariableByName("SpotLight2CosHalfAngle")->AsScalar());
+
 	TeapotLights[0]->SetColourVar(Effect->GetVariableByName("TeapotLight1Colour")->AsVector());
 	TeapotLights[0]->SetPosVar(Effect->GetVariableByName("TeapotLight1Pos")->AsVector());
 	TeapotLights[1]->SetColourVar(Effect->GetVariableByName("TeapotLight2Colour")->AsVector());
 	TeapotLights[1]->SetPosVar(Effect->GetVariableByName("TeapotLight2Pos")->AsVector());
 	TeapotLights[2]->SetColourVar(Effect->GetVariableByName("TeapotLight3Colour")->AsVector());
 	TeapotLights[2]->SetPosVar(Effect->GetVariableByName("TeapotLight3Pos")->AsVector());
+
 	TintColourVar = Effect->GetVariableByName("TintColour")->AsVector();
 	AmbientColourVar = Effect->GetVariableByName("AmbientColour")->AsVector();
 	SpecularPowerVar = Effect->GetVariableByName("SpecularPower")->AsScalar();
@@ -383,38 +428,50 @@ bool InitScene()
 	///////////////////////
 	// Load/Create models
 
-	Cube = new CModel;
+	WiggleCube = new CModel;
 	Box = new CModel;
 	Floor = new CModel;
-	Light1 = new CLight;
-	Light2 = new CLight;
 	Teapot = new CModel;
 	Portal = new CModel;
+	Troll = new CModel;
 
 
 	// The model class can load ".X" files. It encapsulates (i.e. hides away from this code) the file loading/parsing and creation of vertex/index buffers
 	// We must pass an example technique used for each model. We can then only render models with techniques that uses matching vertex input data
-	if (!Cube->  Load( "Cube.x",  PlainColourTechnique )) return false;
+	if (!WiggleCube->  Load( "Cube.x",  PlainColourTechnique )) return false;
 	if (!Box->  Load( "CardboardBox.x", NormalMappingTechnique, true)) return false;
 	if (!Floor-> Load( "Floor.x", NormalMappingTechnique, true )) return false;
-	if (!Light1->Load( "Light.x", AdditiveTexTintTechnique )) return false;
-	if (!Light2->Load( "Light.x", AdditiveTexTintTechnique)) return false;
+	if (!CubeLight->Load( "Light.x", AdditiveTexTintTechnique )) return false;
 	if (!Teapot->Load( "Teapot.x", VertexLitTechnique )) return false;
-	for (int i = 0; i < g_numLights; i++) {
+	for (int i = 0; i < g_numTeapotLights; i++) {
 		if (!TeapotLights[i]->Load("Light.x", AdditiveTexTintTechnique)) return false;
 	}
+	for (int i = 0; i < g_numSpotLights; i++) {
+		if (!SpotLights[i]->Load("Light.x", AdditiveTexTintTechnique)) return false;
+	}
 	if (!Portal->Load("Portal.x", AdditiveTexTintTechnique)) return false;
+	if (!Troll->Load("Troll.x", ShadowMappingTechnique)) return false;
 
 	// Initial positions
-	Cube->SetPosition( D3DXVECTOR3(-20, 5, 0) );
-	Box->SetPosition( D3DXVECTOR3(30, 10, 0) );
+	WiggleCube->SetPosition( D3DXVECTOR3(-20, 5, 0) );
+	Box->SetPosition( D3DXVECTOR3(0, 0, 30) );
 	Box->SetScale( 8.0f );
-	Light1->SetPosition( D3DXVECTOR3(30, 10, 0) );
-	Light1->SetScale( 4.0f ); // Nice if size of light reflects its brightness
-	Light1->SetColour(D3DXVECTOR3(1.0f, 2.0f, 0.7f) * 5);
-	Light2->SetPosition( D3DXVECTOR3(-20, 30, 50) );
-	Light2->SetScale(4.0f );
-	Light2->SetColour(D3DXVECTOR3(1.0f, 0.8f, 0.2f) * 5);
+	CubeLight->SetPosition( D3DXVECTOR3(30, 10, 0) );
+	CubeLight->SetScale( 4.0f ); // Nice if size of light reflects its brightness
+	CubeLight->SetColour(D3DXVECTOR3(1.0f, 2.0f, 0.7f) * 5);
+
+	Troll->SetPosition(D3DXVECTOR3(-40, 0, 50));
+	Troll->SetScale(5.0f);
+	Troll->SetRotation(D3DXVECTOR3(0.0f, ToRadians(215.0f), 0.0f));
+
+	SpotLights[0]->SetPosition(D3DXVECTOR3(-60, 10, 50));
+	SpotLights[0]->SetScale(4.0f);
+	SpotLights[0]->SetColour(D3DXVECTOR3(0.8f, 0.8f, 0.8f) * 40);
+	SpotLights[0]->FacePoint(Troll->GetPosition());
+	SpotLights[1]->SetPosition(D3DXVECTOR3(-20, 30, 130));
+	SpotLights[1]->SetScale(4.0f);
+	SpotLights[1]->SetColour(D3DXVECTOR3(1.0f, 0.8f, 0.2f) * 80);
+	SpotLights[1]->FacePoint(D3DXVECTOR3(0, 0, 0));
 
 	Teapot->SetPosition(D3DXVECTOR3(0, 0, 80));
 	TeapotLights[0]->SetPosition(D3DXVECTOR3(0, 15, 80));
@@ -439,6 +496,7 @@ bool InitScene()
 	if (FAILED(D3DX10CreateShaderResourceViewFromFile(g_pd3dDevice, L"PatternNormal.dds", NULL, NULL, &BoxNormalMap, NULL))) return false;
 	if (FAILED(D3DX10CreateShaderResourceViewFromFile(g_pd3dDevice, L"PatternDiffuseSpecular.dds", NULL, NULL, &BoxDiffuseMap, NULL))) return false;
 	if (FAILED(D3DX10CreateShaderResourceViewFromFile(g_pd3dDevice, L"flare.jpg", NULL, NULL, &LightDiffuseMap, NULL))) return false;
+	if (FAILED(D3DX10CreateShaderResourceViewFromFile(g_pd3dDevice, L"TrollDiffuseSpecular.dds", NULL, NULL, &TrollDiffuseMap, NULL))) return false;
 
 
 	//**** Portal Texture ****//
@@ -496,6 +554,43 @@ bool InitScene()
 	portalDescDSV.Texture2D.MipSlice = 0;
 	if (FAILED(g_pd3dDevice->CreateDepthStencilView(PortalDepthStencil, &portalDescDSV, &PortalDepthStencilView))) return false;
 
+	////////////////////////
+	//**** Shadow Maps ****//
+
+	// Create the shadow map textures, above we used a D3DX... helper function to create basic textures in one line. Here, we need to
+	// do things manually as we are creating a special kind of texture (one that we can render to). Many settings to prepare:
+	D3D10_TEXTURE2D_DESC texDesc;
+	texDesc.Width = ShadowMapSize; // Size of the shadow map determines quality / resolution of shadows
+	texDesc.Height = ShadowMapSize;
+	texDesc.MipLevels = 1; // 1 level, means just the main texture, no additional mip-maps. Usually don't use mip-maps when rendering to textures (or we would have to render every level)
+	texDesc.ArraySize = 1;
+	texDesc.Format = DXGI_FORMAT_R32_TYPELESS; // The shadow map contains a single 32-bit value [tech gotcha: have to say typeless because depth buffer and texture see things slightly differently]
+	texDesc.SampleDesc.Count = 1;
+	texDesc.SampleDesc.Quality = 0;
+	texDesc.Usage = D3D10_USAGE_DEFAULT;
+	texDesc.BindFlags = D3D10_BIND_DEPTH_STENCIL | D3D10_BIND_SHADER_RESOURCE; // Indicate we will use texture as render target, and will also pass it to shaders
+	texDesc.CPUAccessFlags = 0;
+	texDesc.MiscFlags = 0;
+	if (FAILED(g_pd3dDevice->CreateTexture2D(&texDesc, NULL, &ShadowMap1Texture))) return false;
+	if (FAILED(g_pd3dDevice->CreateTexture2D(&texDesc, NULL, &ShadowMap2Texture))) return false;
+
+	// Create the depth stencil view, i.e. indicate that the texture just created is to be used as a depth buffer
+	D3D10_DEPTH_STENCIL_VIEW_DESC descDSV;
+	descDSV.Format = DXGI_FORMAT_D32_FLOAT; // See "tech gotcha" above
+	descDSV.ViewDimension = D3D10_DSV_DIMENSION_TEXTURE2D;
+	descDSV.Texture2D.MipSlice = 0;
+	if (FAILED(g_pd3dDevice->CreateDepthStencilView(ShadowMap1Texture, &descDSV, &ShadowMap1DepthView))) return false;
+	if (FAILED(g_pd3dDevice->CreateDepthStencilView(ShadowMap2Texture, &descDSV, &ShadowMap2DepthView))) return false;
+
+	// We also need to send this texture (a GPU memory resource) to the shaders. To do that we must create a shader-resource "view"	
+	srDesc.Format = DXGI_FORMAT_R32_FLOAT; // See "tech gotcha" above
+	srDesc.ViewDimension = D3D10_SRV_DIMENSION_TEXTURE2D;
+	srDesc.Texture2D.MostDetailedMip = 0;
+	srDesc.Texture2D.MipLevels = 1;
+	if (FAILED(g_pd3dDevice->CreateShaderResourceView(ShadowMap1Texture, &srDesc, &ShadowMap1))) return false;
+	if (FAILED(g_pd3dDevice->CreateShaderResourceView(ShadowMap2Texture, &srDesc, &ShadowMap2))) return false;
+
+	//*****************************//
 
 	return true;
 }
@@ -514,8 +609,8 @@ void UpdateScene( float frameTime )
 	Portal->UpdateMatrix();
 
 	// Control cube position and update its world matrix each frame
-	Cube->Control( frameTime, Key_I, Key_K, Key_J, Key_L, Key_U, Key_O, Key_Period, Key_Comma );
-	Cube->UpdateMatrix();
+	WiggleCube->Control( frameTime, Key_I, Key_K, Key_J, Key_L, Key_U, Key_O, Key_Period, Key_Comma );
+	WiggleCube->UpdateMatrix();
 
 	Box->UpdateMatrix();
 
@@ -525,11 +620,9 @@ void UpdateScene( float frameTime )
 
 	// Update the orbiting light - a bit of a cheat with the static variable [ask the tutor if you want to know what this is]
 	static float Rotate = 0.0f;
-	Light1->SetPosition( Box->GetPosition() + D3DXVECTOR3(cos(Rotate)*Light1->GetOrbitRadius(), 5, sin(Rotate)*Light1->GetOrbitRadius()) );
-	Rotate -= Light1->GetOrbitSpeed() * frameTime;
-	Light1->UpdateMatrix();
-	// Second light doesn't move, but do need to make sure its matrix has been calculated - could do this in InitScene instead
-	Light2->UpdateMatrix();
+	CubeLight->SetPosition( Box->GetPosition() + D3DXVECTOR3(cos(Rotate)*CubeLight->GetOrbitRadius(), 5, sin(Rotate)*CubeLight->GetOrbitRadius()) );
+	Rotate -= CubeLight->GetOrbitSpeed() * frameTime;
+	CubeLight->UpdateMatrix();
 
 	// Update teapot lights
 	const float colourUpdateSpeed = frameTime * 5;
@@ -538,11 +631,22 @@ void UpdateScene( float frameTime )
 	TeapotLights[1]->ChangeColour(colourUpdateSpeed);
 	TeapotLights[2]->ChangeColour(colourUpdateSpeed * 2);
 
-
 	Teapot->UpdateMatrix();
-	for (int i = 0; i < g_numLights; i++) {
+	for (int i = 0; i < g_numTeapotLights; i++) {
 		TeapotLights[i]->UpdateMatrix();
 	}
+
+	// Update spot lights
+	static float SpotLightRotate = 0.0f;
+	SpotLights[0]->SetPosition(Troll->GetPosition() + D3DXVECTOR3(cos(SpotLightRotate) * SpotLights[0]->GetOrbitRadius(), 20, sin(SpotLightRotate) * SpotLights[0]->GetOrbitRadius()));
+	SpotLightRotate -= SpotLights[0]->GetOrbitSpeed() * frameTime;
+	SpotLights[0]->FacePoint(Troll->GetPosition()); // The troll is in the spotlight...
+
+	for (int i = 0; i < g_numSpotLights; i++) {
+		SpotLights[i]->UpdateMatrix();
+	}
+
+	Troll->UpdateMatrix();
 
 	if (KeyHit(Key_1))
 	{
@@ -562,6 +666,11 @@ void RenderModels(CCamera* camera)
 	ViewMatrixVar->SetMatrix((float*)&camera->GetViewMatrix());
 	ProjMatrixVar->SetMatrix((float*)&camera->GetProjectionMatrix());
 
+	// Send the shadow maps rendered in the function below to the shader
+	ShadowMap1Var->SetResource(ShadowMap1);
+	ShadowMap2Var->SetResource(ShadowMap2);
+
+
 	//---------------------------
 	// Render each model
 
@@ -574,10 +683,10 @@ void RenderModels(CCamera* camera)
 	DiffuseMapVar->SetResource(PortalMap);
 	Portal->Render(VertexLitTechnique);
 
-	// Cube
-	WorldMatrixVar->SetMatrix((float*)Cube->GetWorldMatrix());  // Send the cube's world matrix to the shader
+	// WiggleCube
+	WorldMatrixVar->SetMatrix((float*)WiggleCube->GetWorldMatrix());  // Send the cube's world matrix to the shader
 	DiffuseMapVar->SetResource(CubeDiffuseMap);                 // Send the cube's diffuse/specular map to the shader
-	Cube->Render(WiggleTechnique);                         // Pass rendering technique to the model class
+	WiggleCube->Render(WiggleTechnique);                         // Pass rendering technique to the model class
 
 	// Box
 	WorldMatrixVar->SetMatrix((float*)Box->GetWorldMatrix());
@@ -591,51 +700,101 @@ void RenderModels(CCamera* camera)
 	NormalMapVar->SetResource(FloorNormalMap);
 	Floor->Render(NormalMappingTechnique);
 
-	// Light1
-	WorldMatrixVar->SetMatrix((float*)Light1->GetWorldMatrix());
-	DiffuseMapVar->SetResource(LightDiffuseMap);
-	TintColourVar->SetRawValue(Light1->GetColour(), 0, 12);
-	Light1->Render(AdditiveTexTintTechnique);
-
-	// Light2
-	WorldMatrixVar->SetMatrix((float*)Light2->GetWorldMatrix());
-	DiffuseMapVar->SetResource(LightDiffuseMap);
-	TintColourVar->SetRawValue(Light2->GetColour(), 0, 12);
-	Light2->Render(AdditiveTexTintTechnique);
-
 	// Teapot
 	WorldMatrixVar->SetMatrix((float*)Teapot->GetWorldMatrix());
 	DiffuseMapVar->SetResource(StoneDiffuseMap);
 	Teapot->Render(VertexLitTechnique);
 
+	// Render troll
+	WorldMatrixVar->SetMatrix(Troll->GetWorldMatrix());
+	DiffuseMapVar->SetResource(TrollDiffuseMap);
+	Troll->Render(ShadowMappingTechnique);
+
+	// CubeLight
+	WorldMatrixVar->SetMatrix((float*)CubeLight->GetWorldMatrix());
+	DiffuseMapVar->SetResource(LightDiffuseMap);
+	TintColourVar->SetRawValue(CubeLight->GetColour(), 0, 12);
+	CubeLight->Render(AdditiveTexTintTechnique);
+
 	// Teapot Lights (3)
-	for (int i = 0; i < g_numLights; i++) {
+	for (int i = 0; i < g_numTeapotLights; i++) {
 		WorldMatrixVar->SetMatrix((float*)TeapotLights[i]->GetWorldMatrix());
 		DiffuseMapVar->SetResource(LightDiffuseMap);
 		TintColourVar->SetRawValue(TeapotLights[i]->GetColour(), 0, 12);
 		TeapotLights[i]->Render(AdditiveTexTintTechnique);
 	}
+
+	// Spot Lights (2)
+	for (int i = 0; i < g_numSpotLights; i++) {
+		WorldMatrixVar->SetMatrix((float*)SpotLights[i]->GetWorldMatrix());
+		DiffuseMapVar->SetResource(LightDiffuseMap);
+		TintColourVar->SetRawValue(SpotLights[i]->GetColour(), 0, 12);
+		SpotLights[i]->Render(AdditiveTexTintTechnique);
+	}
+}
+
+
+void RenderShadowMap(CLight* light)
+{
+	//---------------------------------
+	// Set "camera" matrices in shader
+
+	// Pass the light's "camera" matrices to the vertex shader - use helper functions above to turn spotlight settings into "camera" matrices
+	ViewMatrixVar->SetMatrix(light->CalculateLightViewMatrix());
+	ProjMatrixVar->SetMatrix(light->CalculateLightProjMatrix());
+
+
+	//-----------------------------------
+	// Render each model into shadow map
+
+	// Render troll - no need to set its texture as shadow maps just render to the depth buffer
+	WorldMatrixVar->SetMatrix(Troll->GetWorldMatrix());
+	Troll->Render(DepthOnlyTechnique);  // Use special rendering technique to render depths only
+
+	// Same for the other models in the scene
+	WorldMatrixVar->SetMatrix(WiggleCube->GetWorldMatrix());
+	WiggleCube->Render(DepthOnlyTechnique);
+
+	WorldMatrixVar->SetMatrix(Floor->GetWorldMatrix());
+	Floor->Render(DepthOnlyTechnique);
+
+	WorldMatrixVar->SetMatrix(Teapot->GetWorldMatrix());
+	Teapot->Render(DepthOnlyTechnique);
+
+	WorldMatrixVar->SetMatrix(Box->GetWorldMatrix());
+	Box->Render(DepthOnlyTechnique);
+
+	WorldMatrixVar->SetMatrix(Portal->GetWorldMatrix());
+	Portal->Render(DepthOnlyTechnique);
 }
 
 // Render everything in the scene
 void RenderScene()
 {
 	// Pass light information to the vertex shader
-	Light1PosVar->SetRawValue(Light1->GetPosition(), 0, 12);  // Send 3 floats (12 bytes) from C++ LightPos variable (x,y,z) to shader counterpart (middle parameter is unused) 
-	Light1ColourVar->SetRawValue(Light1->GetColour(), 0, 12);
-	Light2PosVar->SetRawValue(Light2->GetPosition(), 0, 12);
-	Light2ColourVar->SetRawValue(Light2->GetColour(), 0, 12);
-	TeapotLights[0]->GetPosVar()->SetRawValue(TeapotLights[0]->GetPosition(), 0, 12);
-	TeapotLights[0]->GetColourVar()->SetRawValue(TeapotLights[0]->GetColour(), 0, 12);
-	TeapotLights[1]->GetPosVar()->SetRawValue(TeapotLights[1]->GetPosition(), 0, 12);
-	TeapotLights[1]->GetColourVar()->SetRawValue(TeapotLights[1]->GetColour(), 0, 12);
-	TeapotLights[2]->GetPosVar()->SetRawValue(TeapotLights[2]->GetPosition(), 0, 12);
-	TeapotLights[2]->GetColourVar()->SetRawValue(TeapotLights[2]->GetColour(), 0, 12);
+	CubeLight->GetPosVar()->SetRawValue(CubeLight->GetPosition(), 0, 12);  // Send 3 floats (12 bytes) from C++ LightPos variable (x,y,z) to shader counterpart (middle parameter is unused) 
+	CubeLight->GetColourVar()->SetRawValue(CubeLight->GetColour(), 0, 12);
+	
+	for (int i = 0; i < g_numTeapotLights; i++) {
+		TeapotLights[i]->GetPosVar()->SetRawValue(TeapotLights[i]->GetPosition(), 0, 12);
+		TeapotLights[i]->GetColourVar()->SetRawValue(TeapotLights[i]->GetColour(), 0, 12);
+	}
+	
+	for (int i = 0; i < g_numSpotLights; i++) {
+		SpotLights[i]->GetPosVar()->SetRawValue(SpotLights[i]->GetPosition(), 0, 12);
+		SpotLights[i]->GetColourVar()->SetRawValue(SpotLights[i]->GetColour(), 0, 12);
+		SpotLights[i]->GetFacingVar()->SetRawValue(SpotLights[i]->GetFacing(), 0, 12);
+		SpotLights[i]->GetViewMatrixVar()->SetMatrix(SpotLights[i]->CalculateLightViewMatrix());
+		SpotLights[i]->GetProjMatrixVar()->SetMatrix(SpotLights[i]->CalculateLightProjMatrix());
+		SpotLights[i]->GetConeAngleVar()->SetFloat(cos(ToRadians(SpotLights[i]->GetConeAngle() * 0.5f)));
+	}
+
 	AmbientColourVar->SetRawValue(AmbientColour, 0, 12);
 	SpecularPowerVar->SetFloat(SpecularPower);
 	// Parallax mapping depth
 	ParallaxDepthVar->SetFloat(g_useParallax ? g_parallaxDepth : 0.0f);
-	
+
+
 	//---------------------------
 	// Render portal scene
 
@@ -658,6 +817,32 @@ void RenderScene()
 
 	// Render everything from the portal camera's point of view (into the portal render target [texture] set above)
 	RenderModels(PortalCamera);
+
+
+	//---------------------------
+	// Render shadow maps
+
+	// Setup the viewport - defines which part of the shadow map we will render to (usually all of it)
+	vp.Width = ShadowMapSize;
+	vp.Height = ShadowMapSize;
+	vp.MinDepth = 0.0f;
+	vp.MaxDepth = 1.0f;
+	vp.TopLeftX = 0;
+	vp.TopLeftY = 0;
+	g_pd3dDevice->RSSetViewports(1, &vp);
+
+	// Rendering a single shadow map for a light
+	// 1. Select the shadow map texture as the current depth buffer. We will not be rendering any pixel colours
+	// 2. Clear the shadow map texture (as a depth buffer)
+	// 3. Render everything from point of view of light 0
+	g_pd3dDevice->OMSetRenderTargets(0, 0, ShadowMap1DepthView);
+	g_pd3dDevice->ClearDepthStencilView(ShadowMap1DepthView, D3D10_CLEAR_DEPTH, 1.0f, 0);
+	RenderShadowMap(SpotLights[0]);
+
+	g_pd3dDevice->OMSetRenderTargets(0, 0, ShadowMap2DepthView);
+	g_pd3dDevice->ClearDepthStencilView(ShadowMap2DepthView, D3D10_CLEAR_DEPTH, 1.0f, 0);
+	RenderShadowMap(SpotLights[1]);
+
 
 	//---------------------------
 	// Render main scene
