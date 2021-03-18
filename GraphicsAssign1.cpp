@@ -54,7 +54,10 @@ float g_clearColour[4] = { 0.2f, 0.2f, 0.3f, 1.0f }; // Good idea to match backg
 CModel* WiggleCube;
 CModel* Box;
 CModel* Floor;
+CModel* Teapot;
 CModel* Troll;
+CLight* Sphere;
+CModel* Car;
 CCamera* Camera;
 
 //**** Portal Data ****//
@@ -103,6 +106,8 @@ ID3D10ShaderResourceView* FloorDiffuseMap = NULL;
 ID3D10ShaderResourceView* FloorNormalMap = NULL;
 ID3D10ShaderResourceView* StoneDiffuseMap = NULL;
 ID3D10ShaderResourceView* TrollDiffuseMap = NULL;
+ID3D10ShaderResourceView* CarDiffuseMap = NULL;
+ID3D10ShaderResourceView* CellMap = NULL;
 
 // Light data - stored manually as there is no light class
 D3DXVECTOR3 AmbientColour = D3DXVECTOR3( 0.2f, 0.2f, 0.2f );
@@ -111,8 +116,7 @@ float SpecularPower = 256.0f;
 CLight* CubeLight;
 CLight* TeapotLights[g_numTeapotLights];
 CLight* SpotLights[g_numSpotLights];
-
-CModel* Teapot;
+CLight* CarLight;
 // Note: There are move & rotation speed constants in Defines.h
 
 //--------------------------------------------------------------------------------------
@@ -127,9 +131,10 @@ ID3D10EffectTechnique* TintDiffuse = NULL;
 ID3D10EffectTechnique* WiggleTechnique = NULL;
 ID3D10EffectTechnique* VertexLitTechnique = NULL;
 ID3D10EffectTechnique* AdditiveTexTintTechnique = NULL;
-ID3D10EffectTechnique* NormalMappingTechnique = NULL;
+ID3D10EffectTechnique* ParallaxMappingTechnique = NULL;
 ID3D10EffectTechnique* ShadowMappingTechnique = NULL;
 ID3D10EffectTechnique* DepthOnlyTechnique = NULL;
+ID3D10EffectTechnique* CellShadingTechnique = NULL;
 
 // Matrices
 ID3D10EffectMatrixVariable* WorldMatrixVar = NULL;
@@ -143,6 +148,7 @@ ID3D10EffectShaderResourceVariable* DiffuseMapVar = NULL;
 ID3D10EffectShaderResourceVariable* NormalMapVar = NULL;
 ID3D10EffectShaderResourceVariable* ShadowMap1Var = NULL;
 ID3D10EffectShaderResourceVariable* ShadowMap2Var = NULL; 
+ID3D10EffectShaderResourceVariable* CellMapVar = NULL;
 
 
 // Miscellaneous
@@ -281,6 +287,9 @@ void ReleaseResources()
 	delete Portal;
 	delete PortalCamera;
 	delete Troll;
+	delete Sphere;
+	delete Car;
+	delete CarLight;
 	for (int i = 0; i < g_numTeapotLights; i++) {
 		delete TeapotLights[i];
 	}
@@ -295,6 +304,7 @@ void ReleaseResources()
     if( BoxNormalMap )     BoxNormalMap->Release();
     if( StoneDiffuseMap )  StoneDiffuseMap->Release();
 	if (TrollDiffuseMap)   TrollDiffuseMap->Release();
+	if (CarDiffuseMap)	   CarDiffuseMap->Release();
 	if( Effect )           Effect->Release();
 	if( DepthStencilView ) DepthStencilView->Release();
 	if( RenderTargetView ) RenderTargetView->Release();
@@ -343,9 +353,10 @@ bool LoadEffectFile()
 	WiggleTechnique = Effect->GetTechniqueByName("WiggleTechnique");
 	VertexLitTechnique = Effect->GetTechniqueByName("VertexLitTechnique");
 	AdditiveTexTintTechnique = Effect->GetTechniqueByName("AdditiveTexTint");
-	NormalMappingTechnique = Effect->GetTechniqueByName("NormalMapping");
+	ParallaxMappingTechnique = Effect->GetTechniqueByName("ParallaxMappingTechnique");
 	ShadowMappingTechnique = Effect->GetTechniqueByName("ShadowMappingTechnique");
 	DepthOnlyTechnique = Effect->GetTechniqueByName("DepthOnlyTechnique");
+	CellShadingTechnique = Effect->GetTechniqueByName("CellShadingTechnique");
 
 	// Create special variables to allow us to access global variables in the shaders from C++
 	WorldMatrixVar    = Effect->GetVariableByName( "WorldMatrix" )->AsMatrix();
@@ -358,6 +369,7 @@ bool LoadEffectFile()
 	NormalMapVar  = Effect->GetVariableByName("NormalMap")->AsShaderResource();
 	ShadowMap1Var = Effect->GetVariableByName("ShadowMap1")->AsShaderResource();
 	ShadowMap2Var = Effect->GetVariableByName("ShadowMap2")->AsShaderResource();
+	CellMapVar = Effect->GetVariableByName("CellMap")->AsShaderResource();
 
 	// Other shader variables
 	ModelColourVar = Effect->GetVariableByName( "ModelColour"  )->AsVector();
@@ -367,6 +379,7 @@ bool LoadEffectFile()
 	
 	// Initialize light objects
 	CubeLight = new CLight;
+	CarLight = new CLight;
 	for (int i = 0; i < g_numTeapotLights; i++) {
 		TeapotLights[i] = new CLight;
 	}
@@ -375,6 +388,9 @@ bool LoadEffectFile()
 	}
 	CubeLight->SetColourVar(Effect->GetVariableByName("CubeLightColour")->AsVector());
 	CubeLight->SetPosVar(Effect->GetVariableByName("CubeLightPos")->AsVector());
+
+	CarLight->SetColourVar(Effect->GetVariableByName("CarLightColour")->AsVector());
+	CarLight->SetPosVar(Effect->GetVariableByName("CarLightPos")->AsVector());
 
 	SpotLights[0]->SetColourVar(Effect->GetVariableByName("SpotLight1Colour")->AsVector());
 	SpotLights[0]->SetPosVar(Effect->GetVariableByName("SpotLight1Pos")->AsVector());
@@ -434,13 +450,14 @@ bool InitScene()
 	Teapot = new CModel;
 	Portal = new CModel;
 	Troll = new CModel;
-
+	Sphere = new CLight;
+	Car = new CModel;
 
 	// The model class can load ".X" files. It encapsulates (i.e. hides away from this code) the file loading/parsing and creation of vertex/index buffers
 	// We must pass an example technique used for each model. We can then only render models with techniques that uses matching vertex input data
-	if (!WiggleCube->  Load( "Cube.x",  PlainColourTechnique )) return false;
-	if (!Box->  Load( "CardboardBox.x", NormalMappingTechnique, true)) return false;
-	if (!Floor-> Load( "Floor.x", NormalMappingTechnique, true )) return false;
+	if (!WiggleCube->  Load( "Cube.x", WiggleTechnique)) return false;
+	if (!Box->  Load( "CardboardBox.x", ParallaxMappingTechnique, true)) return false;
+	if (!Floor-> Load( "Floor.x", ParallaxMappingTechnique, true )) return false;
 	if (!CubeLight->Load( "Light.x", AdditiveTexTintTechnique )) return false;
 	if (!Teapot->Load( "Teapot.x", VertexLitTechnique )) return false;
 	for (int i = 0; i < g_numTeapotLights; i++) {
@@ -451,16 +468,19 @@ bool InitScene()
 	}
 	if (!Portal->Load("Portal.x", AdditiveTexTintTechnique)) return false;
 	if (!Troll->Load("Troll.x", ShadowMappingTechnique)) return false;
+	if (!Sphere->Load("Sphere.x", PlainColourTechnique)) return false;
+	if (!Car->Load("AstonMartin.x", CellShadingTechnique)) return false;
+	if (!CarLight->Load("Light.x", AdditiveTexTintTechnique)) return false;
 
 	// Initial positions
 	WiggleCube->SetPosition( D3DXVECTOR3(-20, 5, 0) );
 	Box->SetPosition( D3DXVECTOR3(0, 0, 30) );
 	Box->SetScale( 8.0f );
 	CubeLight->SetPosition( D3DXVECTOR3(30, 10, 0) );
-	CubeLight->SetScale( 4.0f ); // Nice if size of light reflects its brightness
+	CubeLight->SetScale( 4.0f );
 	CubeLight->SetColour(D3DXVECTOR3(1.0f, 2.0f, 0.7f) * 5);
 
-	Troll->SetPosition(D3DXVECTOR3(-40, 0, 50));
+	Troll->SetPosition(D3DXVECTOR3(-40, 0, 40));
 	Troll->SetScale(5.0f);
 	Troll->SetRotation(D3DXVECTOR3(0.0f, ToRadians(215.0f), 0.0f));
 
@@ -486,9 +506,19 @@ bool InitScene()
 
 	Portal->SetPosition(D3DXVECTOR3(50, 15, 100));
 	Portal->SetRotation(D3DXVECTOR3(0.0f, ToRadians(-130.0f), 0.0f));
+
+	Sphere->SetPosition(D3DXVECTOR3(20, 20, 30));
+	Sphere->SetColour(D3DXVECTOR3(0.3f, 0.3f, 1.0f));
+	Sphere->SetScale(0.2f);
+
+	Car->SetPosition(D3DXVECTOR3(45, 0, 15));
+	Car->SetScale(5.0f);
+	CarLight->SetPosition(D3DXVECTOR3(45, 0, 15));
+	CarLight->SetScale(4.0f);
+	CarLight->SetColour(D3DXVECTOR3(1.0f, 1.0f, 0.2f) * 5);
+
 	//////////////////
 	// Load textures
-
 	if (FAILED( D3DX10CreateShaderResourceViewFromFile( g_pd3dDevice, L"StoneDiffuseSpecular.dds", NULL, NULL, &CubeDiffuseMap,  NULL ) )) return false;
 	if (FAILED( D3DX10CreateShaderResourceViewFromFile( g_pd3dDevice, L"CobbleDiffuseSpecular.dds",  NULL, NULL, &FloorDiffuseMap, NULL ) )) return false;
 	if (FAILED( D3DX10CreateShaderResourceViewFromFile( g_pd3dDevice, L"CobbleNormalDepth.dds",      NULL, NULL, &FloorNormalMap,   NULL ) )) return false;
@@ -497,6 +527,8 @@ bool InitScene()
 	if (FAILED(D3DX10CreateShaderResourceViewFromFile(g_pd3dDevice, L"PatternDiffuseSpecular.dds", NULL, NULL, &BoxDiffuseMap, NULL))) return false;
 	if (FAILED(D3DX10CreateShaderResourceViewFromFile(g_pd3dDevice, L"flare.jpg", NULL, NULL, &LightDiffuseMap, NULL))) return false;
 	if (FAILED(D3DX10CreateShaderResourceViewFromFile(g_pd3dDevice, L"TrollDiffuseSpecular.dds", NULL, NULL, &TrollDiffuseMap, NULL))) return false;
+	if (FAILED(D3DX10CreateShaderResourceViewFromFile(g_pd3dDevice, L"Red.png", NULL, NULL, &CarDiffuseMap, NULL))) return false;
+	if (FAILED(D3DX10CreateShaderResourceViewFromFile(g_pd3dDevice, L"CellGradient.png", NULL, NULL, &CellMap, NULL))) return false;
 
 
 	//**** Portal Texture ****//
@@ -618,11 +650,16 @@ void UpdateScene( float frameTime )
 	g_WiggleVar += 6 * frameTime;
 	g_pCubeWiggleVar->SetFloat(g_WiggleVar);
 
-	// Update the orbiting light - a bit of a cheat with the static variable [ask the tutor if you want to know what this is]
-	static float Rotate = 0.0f;
-	CubeLight->SetPosition( Box->GetPosition() + D3DXVECTOR3(cos(Rotate)*CubeLight->GetOrbitRadius(), 5, sin(Rotate)*CubeLight->GetOrbitRadius()) );
-	Rotate -= CubeLight->GetOrbitSpeed() * frameTime;
+	// Update the orbiting lights - a bit of a cheat with the static variable [ask the tutor if you want to know what this is]
+	static float CubeLightRotate = 0.0f;
+	CubeLight->SetPosition( Box->GetPosition() + D3DXVECTOR3(cos(CubeLightRotate)*CubeLight->GetOrbitRadius(), 5, sin(CubeLightRotate)*CubeLight->GetOrbitRadius()) );
+	CubeLightRotate -= CubeLight->GetOrbitSpeed() * frameTime;
 	CubeLight->UpdateMatrix();
+
+	static float CarLightRotate = 0.0f;
+	CarLight->SetPosition(Car->GetPosition() + D3DXVECTOR3(cos(CarLightRotate) * CarLight->GetOrbitRadius(), 5, sin(CarLightRotate) * CarLight->GetOrbitRadius()));
+	CarLightRotate -= CarLight->GetOrbitSpeed() * frameTime;
+	CarLight->UpdateMatrix();
 
 	// Update teapot lights
 	const float colourUpdateSpeed = frameTime * 5;
@@ -647,6 +684,8 @@ void UpdateScene( float frameTime )
 	}
 
 	Troll->UpdateMatrix();
+	Sphere->UpdateMatrix();
+	Car->UpdateMatrix();
 
 	if (KeyHit(Key_1))
 	{
@@ -692,29 +731,46 @@ void RenderModels(CCamera* camera)
 	WorldMatrixVar->SetMatrix((float*)Box->GetWorldMatrix());
 	DiffuseMapVar->SetResource(BoxDiffuseMap);
 	NormalMapVar->SetResource(BoxNormalMap);
-	Box->Render(NormalMappingTechnique);
+	Box->Render(ParallaxMappingTechnique);
 
 	// Floor
 	WorldMatrixVar->SetMatrix((float*)Floor->GetWorldMatrix());
 	DiffuseMapVar->SetResource(FloorDiffuseMap);
 	NormalMapVar->SetResource(FloorNormalMap);
-	Floor->Render(NormalMappingTechnique);
+	Floor->Render(ParallaxMappingTechnique);
 
 	// Teapot
 	WorldMatrixVar->SetMatrix((float*)Teapot->GetWorldMatrix());
 	DiffuseMapVar->SetResource(StoneDiffuseMap);
 	Teapot->Render(VertexLitTechnique);
 
-	// Render troll
+	// Troll
 	WorldMatrixVar->SetMatrix(Troll->GetWorldMatrix());
 	DiffuseMapVar->SetResource(TrollDiffuseMap);
 	Troll->Render(ShadowMappingTechnique);
+
+	// Shere
+	WorldMatrixVar->SetMatrix(Sphere->GetWorldMatrix());
+	ModelColourVar->SetRawValue(Blue, 0, 12);
+	Sphere->Render(PlainColourTechnique);
+
+	// Car
+	WorldMatrixVar->SetMatrix(Car->GetWorldMatrix());
+	DiffuseMapVar->SetResource(CarDiffuseMap);
+	ModelColourVar->SetRawValue(Black, 0, 12);
+	Car->Render(CellShadingTechnique);
 
 	// CubeLight
 	WorldMatrixVar->SetMatrix((float*)CubeLight->GetWorldMatrix());
 	DiffuseMapVar->SetResource(LightDiffuseMap);
 	TintColourVar->SetRawValue(CubeLight->GetColour(), 0, 12);
 	CubeLight->Render(AdditiveTexTintTechnique);
+
+	// CarLight
+	WorldMatrixVar->SetMatrix((float*)CarLight->GetWorldMatrix());
+	DiffuseMapVar->SetResource(LightDiffuseMap);
+	TintColourVar->SetRawValue(CarLight->GetColour(), 0, 12);
+	CarLight->Render(AdditiveTexTintTechnique);
 
 	// Teapot Lights (3)
 	for (int i = 0; i < g_numTeapotLights; i++) {
@@ -764,6 +820,12 @@ void RenderShadowMap(CLight* light)
 	WorldMatrixVar->SetMatrix(Box->GetWorldMatrix());
 	Box->Render(DepthOnlyTechnique);
 
+	WorldMatrixVar->SetMatrix(Sphere->GetWorldMatrix());
+	Sphere->Render(DepthOnlyTechnique);
+
+	WorldMatrixVar->SetMatrix(Car->GetWorldMatrix());
+	Car->Render(DepthOnlyTechnique);
+
 	WorldMatrixVar->SetMatrix(Portal->GetWorldMatrix());
 	Portal->Render(DepthOnlyTechnique);
 }
@@ -772,9 +834,12 @@ void RenderShadowMap(CLight* light)
 void RenderScene()
 {
 	// Pass light information to the vertex shader
-	CubeLight->GetPosVar()->SetRawValue(CubeLight->GetPosition(), 0, 12);  // Send 3 floats (12 bytes) from C++ LightPos variable (x,y,z) to shader counterpart (middle parameter is unused) 
+	CubeLight->GetPosVar()->SetRawValue(CubeLight->GetPosition(), 0, 12);
 	CubeLight->GetColourVar()->SetRawValue(CubeLight->GetColour(), 0, 12);
 	
+	CarLight->GetPosVar()->SetRawValue(CarLight->GetPosition(), 0, 12);
+	CarLight->GetColourVar()->SetRawValue(CarLight->GetColour(), 0, 12);
+
 	for (int i = 0; i < g_numTeapotLights; i++) {
 		TeapotLights[i]->GetPosVar()->SetRawValue(TeapotLights[i]->GetPosition(), 0, 12);
 		TeapotLights[i]->GetColourVar()->SetRawValue(TeapotLights[i]->GetColour(), 0, 12);
@@ -793,7 +858,7 @@ void RenderScene()
 	SpecularPowerVar->SetFloat(SpecularPower);
 	// Parallax mapping depth
 	ParallaxDepthVar->SetFloat(g_useParallax ? g_parallaxDepth : 0.0f);
-
+	CellMapVar->SetResource(CellMap);
 
 	//---------------------------
 	// Render portal scene

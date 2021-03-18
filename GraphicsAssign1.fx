@@ -76,6 +76,8 @@ float Wiggle;
 float3 CameraPos;
 float3 CubeLightPos;
 float3 CubeLightColour;
+float3 CarLightPos;
+float3 CarLightColour;
 float3 TeapotLight1Pos;
 float3 TeapotLight1Colour;
 float3 TeapotLight2Pos;
@@ -102,7 +104,7 @@ float ParallaxDepth;
 
 // Diffuse texture map (the main texture colour) - may contain specular map in alpha channel
 Texture2D DiffuseMap;
-
+Texture2D CellMap;
 Texture2D NormalMap;
 Texture2D ShadowMap1;
 Texture2D ShadowMap2;
@@ -120,6 +122,7 @@ SamplerState PointClamp
 	AddressU = Clamp;
 	AddressV = Clamp;
 };
+
 
 //--------------------------------------------------------------------------------------
 // Vertex Shaders
@@ -198,6 +201,36 @@ VS_NORMALMAP_OUTPUT NormalMapTransform(VS_NORMALMAP_INPUT vIn)
 	return vOut;
 }
 
+
+VS_BASIC_OUTPUT ExpandOutline(VS_BASIC_INPUT vIn)
+{
+	VS_BASIC_OUTPUT vOut;
+
+	// Transform model-space vertex position to world-space
+	float4 modelPos = float4(vIn.Pos, 1.0f); // Promote to 1x4 so we can multiply by 4x4 matrix, put 1.0 in 4th element for a point (0.0 for a vector)
+	float4 worldPos = mul(modelPos, WorldMatrix);
+
+	// Next the usual transform from world space to camera space - but we don't go any further here - this will be used to help expand the outline
+	// The result "viewPos" is the xyz position of the vertex as seen from the camera. The z component is the distance from the camera - that's useful...
+	float4 viewPos = mul(worldPos, ViewMatrix);
+
+	// Transform model normal to world space, using the normal to expand the geometry, not for lighting
+	float4 modelNormal = float4(vIn.Normal, 0.0f); // Set 4th element to 0.0 this time as normals are vectors
+	float4 worldNormal = normalize(mul(modelNormal, WorldMatrix)); // Normalise in case of world matrix scaling
+
+	// Now we return to the world position of this vertex and expand it along the world normal - that will expand the geometry outwards.
+	// Use the distance from the camera to decide how much to expand. Use this distance together with a sqrt to creates an outline that
+	// gets thinner in the distance, but always remains clear. Overall thickness is also controlled by the constant "OutlineThickness"
+	worldPos += 0.015 * sqrt(viewPos.z) * worldNormal;
+
+	// Transform new expanded world-space vertex position to viewport-space and output
+	viewPos = mul(worldPos, ViewMatrix);
+	vOut.ProjPos = mul(viewPos, ProjMatrix);
+
+	return vOut;
+}
+
+
 //--------------------------------------------------------------------------------------
 // Pixel Shaders
 //--------------------------------------------------------------------------------------
@@ -207,6 +240,8 @@ VS_NORMALMAP_OUTPUT NormalMapTransform(VS_NORMALMAP_INPUT vIn)
 //
 float4 OneColour( VS_BASIC_OUTPUT vOut ) : SV_Target
 {
+	vOut.UV.x += 0.1f;
+	vOut.UV.y += 0.1f;
 	return float4( ModelColour, 1.0 ); // Set alpha channel to 1.0 (opaque)
 }
 
@@ -338,6 +373,13 @@ float4 NormalMapLighting(VS_NORMALMAP_OUTPUT vOut) : SV_Target
 	float3 halfway = normalize(Light1Dir + CameraDir);
 	float3 SpecularLight1 = DiffuseLight1 * pow(max(dot(worldNormal.xyz, halfway), 0), SpecularPower);
 
+	//// CAR LIGHT
+	Light1Dir = normalize(CarLightPos - vOut.WorldPos.xyz);   // Direction for each light is different
+	Light1Dist = length(CarLightPos - vOut.WorldPos.xyz);
+	float3 CarDiffuseLight = CarLightColour * saturate(dot(worldNormal.xyz, Light1Dir)) / Light1Dist;
+	halfway = normalize(Light1Dir + CameraDir);
+	float3 CarSpecularLight = CarDiffuseLight * pow(saturate(dot(worldNormal.xyz, halfway)), SpecularPower);
+
 	//// TEAPOT LIGHT 1
 	Light1Dir = normalize(TeapotLight1Pos - vOut.WorldPos.xyz);   // Direction for each light is different
 	Light1Dist = length(TeapotLight1Pos - vOut.WorldPos.xyz);
@@ -441,8 +483,8 @@ float4 NormalMapLighting(VS_NORMALMAP_OUTPUT vOut) : SV_Target
 	}
 
 	// Sum the effect of all lights - add the ambient at this stage rather than for each light (or we will get twice the ambient level)
-	float3 DiffuseLight = AmbientColour + DiffuseLight1 + TeapotDiffuseLight1 + TeapotDiffuseLight2 + TeapotDiffuseLight3 + DiffuseSpotLight1 + DiffuseSpotLight2;
-	float3 SpecularLight = SpecularLight1 +  TeapotSpecularLight1 + TeapotSpecularLight2 + TeapotSpecularLight3 + SpecularSpotLight1 + SpecularSpotLight2;
+	float3 DiffuseLight = AmbientColour + DiffuseLight1 + CarDiffuseLight + TeapotDiffuseLight1 + TeapotDiffuseLight2 + TeapotDiffuseLight3 + DiffuseSpotLight1 + DiffuseSpotLight2;
+	float3 SpecularLight = SpecularLight1 + CarSpecularLight + TeapotSpecularLight1 + TeapotSpecularLight2 + TeapotSpecularLight3 + SpecularSpotLight1 + SpecularSpotLight2;
 
 
 	////////////////////
@@ -597,6 +639,141 @@ float4 PixelDepth(VS_BASIC_OUTPUT vOut) : SV_Target
 	return vOut.ProjPos.z / vOut.ProjPos.w;
 }
 
+float4 CellShadingVertexLitDiffuseMap(VS_LIGHTING_OUTPUT vOut) : SV_Target  // The ": SV_Target" bit just indicates that the returned float4 colour goes to the render target (i.e. it's a colour to render)
+{
+	// Can't guarantee the normals are length 1 now (because the world matrix may contain scaling), so renormalise
+	// If lighting in the pixel shader, this is also because the interpolation from vertex shader to pixel shader will also rescale normals
+	float3 worldNormal = normalize(vOut.WorldNormal);
+	// Calculate direction of camera
+	float3 CameraDir = normalize(CameraPos - vOut.WorldPos.xyz); // Position of camera - position of current vertex (or pixel) (in world space)
+
+	///////////////////////
+	// Calculate lighting
+
+	//// SPOT LIGHT 1
+	// Slight adjustment to calculated depth of pixels so they don't shadow themselves
+	const float DepthAdjust = 0.0005f;
+
+	// Start with no light contribution from this light
+	float3 DiffuseSpotLight1 = 0;
+	float3 SpecularSpotLight1 = 0;
+
+	// Using the world position of the current pixel and the matrices of the light (as a camera), find the 2D position of the
+	// pixel *as seen from the light*. Will use this to find which part of the shadow map to look at.
+	// The usual view / projection matrix multiplies as we would see in a vertex shader (can improve performance by putting these lines in vertex shader)
+	float4 light1ViewPos = mul(float4(vOut.WorldPos), SpotLight1ViewMatrix);
+	float4 light1ProjPos = mul(light1ViewPos, SpotLight1ProjMatrix);
+
+	// Get direction from pixel to light
+	float3 Light1Dir = normalize(SpotLight1Pos - vOut.WorldPos.xyz);
+
+	// Check if pixel is within light cone
+	if (dot(SpotLight1Facing, -Light1Dir) > SpotLight1CosHalfAngle) //**** This condition needs to be written as the first exercise to get spotlights working
+	{
+		// Convert 2D pixel position as viewed from light into texture coordinates for shadow map - an advanced topic related to the projection step
+		// Detail: 2D position x & y get perspective divide, then converted from range -1->1 to UV range 0->1. Also flip V axis
+		float2 shadowUV = 0.5f * light1ProjPos.xy / light1ProjPos.w + float2(0.5f, 0.5f);
+		shadowUV.y = 1.0f - shadowUV.y;
+
+		// Get depth of this pixel if it were visible from the light (another advanced projection step)
+		float depthFromLight = light1ProjPos.z / light1ProjPos.w - DepthAdjust; //*** Adjustment so polygons don't shadow themselves
+
+		// Compare pixel depth from light with depth held in shadow map of the light. If shadow map depth is less than something is nearer
+		// to the light than this pixel - so the pixel gets no effect from this light
+		if (depthFromLight < ShadowMap1.Sample(PointClamp, shadowUV).r)
+		{
+			// Remainder of standard per-pixel lighting code is unchanged
+			float3 light1Dist = length(SpotLight1Pos - vOut.WorldPos.xyz);
+			DiffuseSpotLight1 = SpotLight1Colour * max(dot(worldNormal.xyz, Light1Dir), 0) / light1Dist;
+			float3 halfway = normalize(Light1Dir + CameraDir);
+			SpecularSpotLight1 = DiffuseSpotLight1 * pow(max(dot(worldNormal.xyz, halfway), 0), SpecularPower);
+		}
+	}
+
+	//// SPOT LIGHT 2
+	float3 DiffuseSpotLight2 = 0;
+	float3 SpecularSpotLight2 = 0;
+
+	// Using the world position of the current pixel and the matrices of the light (as a camera), find the 2D position of the
+	// pixel *as seen from the light*. Will use this to find which part of the shadow map to look at.
+	// The usual view / projection matrix multiplies as we would see in a vertex shader (can improve performance by putting these lines in vertex shader)
+	float4 Light2ViewPos = mul(float4(vOut.WorldPos), SpotLight2ViewMatrix);
+	float4 Light2ProjPos = mul(Light2ViewPos, SpotLight2ProjMatrix);
+
+	// Get direction from pixel to light
+	float3 Light2Dir = normalize(SpotLight2Pos - vOut.WorldPos.xyz);
+
+
+	// Check if pixel is within light cone
+	if (dot(SpotLight2Facing, -Light2Dir) > SpotLight2CosHalfAngle) //**** This condition needs to be written as the first exercise to get spotlights working
+	{
+		// Convert 2D pixel position as viewed from light into texture coordinates for shadow map - an advanced topic related to the projection step
+		// Detail: 2D position x & y get perspective divide, then converted from range -1->1 to UV range 0->1. Also flip V axis
+		float2 shadowUV = 0.5f * Light2ProjPos.xy / Light2ProjPos.w + float2(0.5f, 0.5f);
+		shadowUV.y = 1.0f - shadowUV.y;
+
+		// Get depth of this pixel if it were visible from the light (another advanced projection step)
+		float depthFromLight = Light2ProjPos.z / Light2ProjPos.w - DepthAdjust; //*** Adjustment so polygons don't shadow themselves
+
+		// Compare pixel depth from light with depth held in shadow map of the light. If shadow map depth is less than something is nearer
+		// to the light than this pixel - so the pixel gets no effect from this light
+		if (depthFromLight < ShadowMap2.Sample(PointClamp, shadowUV).r)
+		{
+			// Remainder of standard per-pixel lighting code is unchanged
+			float3 Light2Dist = length(SpotLight2Pos - vOut.WorldPos.xyz);
+			DiffuseSpotLight2 = SpotLight2Colour * max(dot(worldNormal.xyz, Light2Dir), 0) / Light2Dist;
+			float3 halfway = normalize(Light2Dir + CameraDir);
+			SpecularSpotLight2 = DiffuseSpotLight2 * pow(max(dot(worldNormal.xyz, halfway), 0), SpecularPower);
+		}
+	}
+
+	//// CAR LIGHT 
+	float3 CarLightDir = normalize(CarLightPos - vOut.WorldPos.xyz);  
+	float3 CarLightDist = length(CarLightPos - vOut.WorldPos.xyz);
+
+	//****| INFO |*************************************************************************************//
+	// To make a cartoon look to the lighting, we clamp the basic light level to just a small range of
+	// colours. This is done by using the light level itself as the U texture coordinate to look up
+	// a colour in a special 1D texture (a single line). This could be done with if statements, but
+	// GPUs are much faster at looking up small textures than if statements
+	//*************************************************************************************************//
+	float DiffuseLevel = max(dot(worldNormal.xyz, CarLightDir), 0);
+	float CellDiffuseLevel = CellMap.Sample(PointClamp, DiffuseLevel).r;
+	float3 CarDiffuseLight = CarLightColour * CellDiffuseLevel / CarLightDist;
+
+	// Do same for specular light and further lights
+	float3 halfway = normalize(CarLightDir + CameraDir);
+	float SpecularLevel = pow(max(dot(worldNormal.xyz, halfway), 0), SpecularPower);
+	float CellSpecularLevel = CellMap.Sample(PointClamp, SpecularLevel).r;
+	float3 CarSpecularLight = CarDiffuseLight * CellSpecularLevel;
+
+
+	// Sum the effect of the two lights - add the ambient at this stage rather than for each light (or we will get twice the ambient level)
+	float3 DiffuseLight = AmbientColour + CarDiffuseLight + DiffuseSpotLight1 + DiffuseSpotLight2;
+	float3 SpecularLight = CarSpecularLight + CarSpecularLight + SpecularSpotLight1 + SpecularSpotLight2;
+
+
+	////////////////////
+	// Sample texture
+
+	// Extract diffuse material colour for this pixel from a texture (using float3, so we get RGB - i.e. ignore any alpha in the texture)
+	float4 DiffuseMaterial = DiffuseMap.Sample(TrilinearWrap, vOut.UV);
+
+	// Assume specular material colour is white (i.e. highlights are a full, untinted reflection of light)
+	float3 SpecularMaterial = DiffuseMaterial.a;
+
+
+	////////////////////
+	// Combine colours 
+
+	// Combine maps and lighting for final pixel colour
+	float4 combinedColour;
+	combinedColour.rgb = DiffuseMaterial * DiffuseLight + SpecularMaterial * SpecularLight;
+	combinedColour.a = 1.0f; // No alpha processing in this shader, so just set it to 1
+
+	return combinedColour;
+}
+
 
 //--------------------------------------------------------------------------------------
 // States
@@ -611,6 +788,11 @@ RasterizerState CullNone  // Cull none of the polygons, i.e. show both sides
 RasterizerState CullBack  // Cull back side of polygon - normal behaviour, only show front of polygons
 {
 	CullMode = Back;
+};
+
+RasterizerState CullFront  // Cull back side of polygon - unsusual behaviour for special techniques
+{
+	CullMode = Front;
 };
 
 DepthStencilState DepthWritesOff // Don't write to the depth buffer - polygons rendered will not obscure other polygons
@@ -710,7 +892,7 @@ technique10 VertexLitTechnique
 	}
 }
 
-technique10 NormalMapping
+technique10 ParallaxMappingTechnique
 {
 	pass P0
 	{
@@ -753,5 +935,31 @@ technique10 DepthOnlyTechnique
 		SetBlendState(NoBlending, float4(0.0f, 0.0f, 0.0f, 0.0f), 0xFFFFFFFF);
 		SetRasterizerState(CullBack);
 		SetDepthStencilState(DepthWritesOn, 0);
+	}
+}
+
+technique10 CellShadingTechnique
+{
+	pass P0
+	{
+		SetVertexShader(CompileShader(vs_4_0, ExpandOutline()));
+		SetGeometryShader(NULL);
+		SetPixelShader(CompileShader(ps_4_0, OneColour()));
+
+		// Cull (remove) the polygons facing us - i.e. draw the inside of the model
+		SetRasterizerState(CullFront);
+
+		// Switch off other blending states
+		SetBlendState(NoBlending, float4(0.0f, 0.0f, 0.0f, 0.0f), 0xFFFFFFFF);
+		SetDepthStencilState(DepthWritesOn, 0);
+	}
+	pass P1
+	{
+		SetVertexShader(CompileShader(vs_4_0, VertexLightingTex()));
+		SetGeometryShader(NULL);
+		SetPixelShader(CompileShader(ps_4_0, CellShadingVertexLitDiffuseMap()));
+
+		// Return to standard culling (remove polygons facing away from us)
+		SetRasterizerState(CullBack);
 	}
 }
