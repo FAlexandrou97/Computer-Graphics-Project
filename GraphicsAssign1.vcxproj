@@ -237,6 +237,7 @@
     <ClInclude Include="Input.h" />
     <ClInclude Include="Light.h" />
     <ClInclude Include="Model.h" />
+    <ClInclude Include="ModelHierarchy.h" />
     <ClInclude Include="Resource.h" />
   </ItemGroup>
   <ItemGroup>
@@ -261,6 +262,7 @@
     <ClCompile Include="Model.cpp" />
     <ClCompile Include="GraphicsAssign1.cpp" />
     <ClCompile Include="Input.cpp" />
+    <ClCompile Include="ModelHierarchy.cpp" />
   </ItemGroup>
   <ItemGroup>
     <None Include="GraphicsAssign1.fx" />

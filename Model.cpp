@@ -67,15 +67,15 @@ bool CModel::Load( const string& fileName, ID3D10EffectTechnique* exampleTechniq
 	ReleaseResources();
 
 	// Use CImportXFile class (from another application) to load the given file. The import code is wrapped in the namespace 'gen'
-	gen::CImportXFile mesh;
-	if (mesh.ImportFile( fileName.c_str() ) != gen::kSuccess)
+	CImportXFile mesh;
+	if (mesh.ImportFile( fileName.c_str() ) != kSuccess)
 	{
 		return false;
 	}
 
 	// Get first sub-mesh from loaded file
-	gen::SSubMesh subMesh;
-	if (mesh.GetSubMesh( 0, &subMesh, tangents ) != gen::kSuccess)
+	SSubMesh subMesh;
+	if (mesh.GetSubMesh( 0, &subMesh, tangents ) != kSuccess)
 	{
 		return false;
 	}

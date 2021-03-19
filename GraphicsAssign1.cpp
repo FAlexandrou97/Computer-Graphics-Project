@@ -37,7 +37,7 @@
 #include "Camera.h"  // Camera class - encapsulates the camera's view and projection matrix
 #include "Input.h"   // Input functions - not DirectX
 #include "Light.h"
-
+#include "ModelHierarchy.h"
 //--------------------------------------------------------------------------------------
 // Global Scene Variables
 //--------------------------------------------------------------------------------------
@@ -58,6 +58,7 @@ CModel* Teapot;
 CModel* Troll;
 CLight* Sphere;
 CModel* Car;
+CModelHierarchy* Bike;
 CCamera* Camera;
 
 //**** Portal Data ****//
@@ -97,7 +98,7 @@ ID3D10ShaderResourceView* ShadowMap2 = NULL;
 
 //*********************//
 
-// Textures - no texture class yet so using DirectX variables
+// Textures
 ID3D10ShaderResourceView* CubeDiffuseMap = NULL;
 ID3D10ShaderResourceView* LightDiffuseMap = NULL;
 ID3D10ShaderResourceView* BoxDiffuseMap = NULL;
@@ -108,6 +109,7 @@ ID3D10ShaderResourceView* StoneDiffuseMap = NULL;
 ID3D10ShaderResourceView* TrollDiffuseMap = NULL;
 ID3D10ShaderResourceView* CarDiffuseMap = NULL;
 ID3D10ShaderResourceView* CellMap = NULL;
+ID3D10ShaderResourceView* BikeDiffuseMap = NULL;
 
 // Light data - stored manually as there is no light class
 D3DXVECTOR3 AmbientColour = D3DXVECTOR3( 0.2f, 0.2f, 0.2f );
@@ -290,6 +292,7 @@ void ReleaseResources()
 	delete Sphere;
 	delete Car;
 	delete CarLight;
+	delete Bike;
 	for (int i = 0; i < g_numTeapotLights; i++) {
 		delete TeapotLights[i];
 	}
@@ -297,20 +300,20 @@ void ReleaseResources()
 		delete SpotLights[i];
 	}
 
-    if( FloorDiffuseMap )  FloorDiffuseMap->Release();
-    if( CubeDiffuseMap )   CubeDiffuseMap->Release();
-	if( LightDiffuseMap )  LightDiffuseMap->Release();
-    if( BoxDiffuseMap )    BoxDiffuseMap->Release();
-    if( BoxNormalMap )     BoxNormalMap->Release();
-    if( StoneDiffuseMap )  StoneDiffuseMap->Release();
-	if (TrollDiffuseMap)   TrollDiffuseMap->Release();
-	if (CarDiffuseMap)	   CarDiffuseMap->Release();
-	if( Effect )           Effect->Release();
-	if( DepthStencilView ) DepthStencilView->Release();
-	if( RenderTargetView ) RenderTargetView->Release();
-	if( DepthStencil )     DepthStencil->Release();
-	if( SwapChain )        SwapChain->Release();
-	if( g_pd3dDevice )     g_pd3dDevice->Release();
+    if( FloorDiffuseMap )		FloorDiffuseMap->Release();
+    if( CubeDiffuseMap )		CubeDiffuseMap->Release();
+	if( LightDiffuseMap )		LightDiffuseMap->Release();
+    if( BoxDiffuseMap )			BoxDiffuseMap->Release();
+    if( BoxNormalMap )			BoxNormalMap->Release();
+    if( StoneDiffuseMap )		StoneDiffuseMap->Release();
+	if (TrollDiffuseMap)		TrollDiffuseMap->Release();
+	if (CarDiffuseMap)			CarDiffuseMap->Release();
+	if( Effect )				Effect->Release();
+	if( DepthStencilView )		DepthStencilView->Release();
+	if( RenderTargetView )		RenderTargetView->Release();
+	if( DepthStencil )			DepthStencil->Release();
+	if( SwapChain )				SwapChain->Release();
+	if( g_pd3dDevice )			g_pd3dDevice->Release();
 	if (PortalDepthStencilView) PortalDepthStencilView->Release();
 	if (PortalDepthStencil)     PortalDepthStencil->Release();
 	if (PortalMap)              PortalMap->Release();
@@ -322,6 +325,8 @@ void ReleaseResources()
 	if (ShadowMap2)             ShadowMap2->Release();
 	if (ShadowMap2DepthView)    ShadowMap2DepthView->Release();
 	if (ShadowMap2Texture)      ShadowMap2Texture->Release();
+	if (BikeDiffuseMap)			BikeDiffuseMap->Release();
+
 }
 
 
@@ -452,6 +457,7 @@ bool InitScene()
 	Troll = new CModel;
 	Sphere = new CLight;
 	Car = new CModel;
+	Bike = new CModelHierarchy;
 
 	// The model class can load ".X" files. It encapsulates (i.e. hides away from this code) the file loading/parsing and creation of vertex/index buffers
 	// We must pass an example technique used for each model. We can then only render models with techniques that uses matching vertex input data
@@ -471,6 +477,7 @@ bool InitScene()
 	if (!Sphere->Load("Sphere.x", PlainColourTechnique)) return false;
 	if (!Car->Load("AstonMartin.x", CellShadingTechnique)) return false;
 	if (!CarLight->Load("Light.x", AdditiveTexTintTechnique)) return false;
+	if (!Bike->Load("Bike.x", VertexLitTechnique)) return false;
 
 	// Initial positions
 	WiggleCube->SetPosition( D3DXVECTOR3(-20, 5, 0) );
@@ -517,6 +524,10 @@ bool InitScene()
 	CarLight->SetScale(4.0f);
 	CarLight->SetColour(D3DXVECTOR3(1.0f, 1.0f, 0.2f) * 5);
 
+	Bike->SetPosition(D3DXVECTOR3(20, 0, 0));
+	Bike->SetScale(2.0f);
+	Bike->SetRotation(D3DXVECTOR3(0.0f, ToRadians(135.0f), 0.0f));
+
 	//////////////////
 	// Load textures
 	if (FAILED( D3DX10CreateShaderResourceViewFromFile( g_pd3dDevice, L"StoneDiffuseSpecular.dds", NULL, NULL, &CubeDiffuseMap,  NULL ) )) return false;
@@ -529,6 +540,7 @@ bool InitScene()
 	if (FAILED(D3DX10CreateShaderResourceViewFromFile(g_pd3dDevice, L"TrollDiffuseSpecular.dds", NULL, NULL, &TrollDiffuseMap, NULL))) return false;
 	if (FAILED(D3DX10CreateShaderResourceViewFromFile(g_pd3dDevice, L"Red.png", NULL, NULL, &CarDiffuseMap, NULL))) return false;
 	if (FAILED(D3DX10CreateShaderResourceViewFromFile(g_pd3dDevice, L"CellGradient.png", NULL, NULL, &CellMap, NULL))) return false;
+	if (FAILED(D3DX10CreateShaderResourceViewFromFile(g_pd3dDevice, L"MetalDiffuseSpecular.dds", NULL, NULL, &BikeDiffuseMap, NULL))) return false;
 
 
 	//**** Portal Texture ****//
@@ -687,9 +699,40 @@ void UpdateScene( float frameTime )
 	Sphere->UpdateMatrix();
 	Car->UpdateMatrix();
 
+	Bike->Control(frameTime, Key_I, Key_K, Key_J, Key_L);
+	Bike->UpdateMatrix();
+
+
 	if (KeyHit(Key_1))
 	{
 		g_useParallax = !g_useParallax;
+	}
+}
+
+
+//********************************************************************************************
+// Render a hierarchical model with the given an (absolute) world matrix
+// 1. Send the world matrix to the shader (refer to RenderMain function to see how other models do this)
+// 2. Render the model passed to the function
+// 3. For every child:
+//    a. Get the child model pointer
+//    b. Update, then get the child's world matrix (stored *relative* to parent)
+//    c. Create *absolute* child world matrix by combining this relative world matrix with
+//       the parent's world matrix
+//    c. Recursive call to this function with child model and absolute child world matrix
+//********************************************************************************************
+void RenderHierarchicalModel(CModelHierarchy* pModel, D3DXMATRIX worldMatrix, ID3D10EffectTechnique* technique)
+{
+	// Render model
+
+	WorldMatrixVar->SetMatrix(worldMatrix);
+	pModel->Render(technique);
+
+	// Render children
+	for (int i = 0; i < pModel->GetNumChildren(); i++) {
+		CModelHierarchy* child = pModel->GetChild(i);
+		child->UpdateMatrix();
+		RenderHierarchicalModel(child, child->GetWorldMatrix() * worldMatrix, technique);
 	}
 }
 
@@ -709,6 +752,12 @@ void RenderModels(CCamera* camera)
 	ShadowMap1Var->SetResource(ShadowMap1);
 	ShadowMap2Var->SetResource(ShadowMap2);
 
+	//****| Render animated model |***********************************************************
+// Don't set the world matrix - the hierarchy code will go through each child and do that
+// Do set the texture though (will use same texture for all child parts here)
+	DiffuseMapVar->SetResource(BikeDiffuseMap);
+	RenderHierarchicalModel(Bike, Bike->GetWorldMatrix(), VertexLitTechnique); // Pass root world matrix and rendering technique to function above
+	//****************************************************************************************
 
 	//---------------------------
 	// Render each model
@@ -826,9 +875,13 @@ void RenderShadowMap(CLight* light)
 	WorldMatrixVar->SetMatrix(Car->GetWorldMatrix());
 	Car->Render(DepthOnlyTechnique);
 
+	WorldMatrixVar->SetMatrix(Bike->GetWorldMatrix());
+	Bike->Render(DepthOnlyTechnique);
+
 	WorldMatrixVar->SetMatrix(Portal->GetWorldMatrix());
 	Portal->Render(DepthOnlyTechnique);
 }
+
 
 // Render everything in the scene
 void RenderScene()

@@ -240,8 +240,9 @@ VS_BASIC_OUTPUT ExpandOutline(VS_BASIC_INPUT vIn)
 //
 float4 OneColour( VS_BASIC_OUTPUT vOut ) : SV_Target
 {
-	vOut.UV.x += 0.1f;
-	vOut.UV.y += 0.1f;
+	// Scoll texture coordinates
+	vOut.UV.x += 0.5f;
+	vOut.UV.y += 0.5f;
 	return float4( ModelColour, 1.0 ); // Set alpha channel to 1.0 (opaque)
 }
 
@@ -287,14 +288,14 @@ float4 VertexLitDiffuseMap(VS_LIGHTING_OUTPUT vOut) : SV_Target  // The ": SV_Ta
 	// Calculate direction of camera
 	float3 CameraDir = normalize(CameraPos - vOut.WorldPos.xyz); // Position of camera - position of current vertex (or pixel) (in world space)
 
-	//// LIGHT 1
+	//// TEAPOT LIGHT 1
 	float3 Light1Dir = normalize(TeapotLight1Pos - vOut.WorldPos.xyz);   // Direction for each light is different
 	float3 Light1Dist = length(TeapotLight1Pos - vOut.WorldPos.xyz);
 	float3 DiffuseLight1 = TeapotLight1Colour * saturate(dot(worldNormal.xyz, Light1Dir)) / Light1Dist;
 	float3 halfway = normalize(Light1Dir + CameraDir);
 	float3 SpecularLight1 = DiffuseLight1 * pow(saturate(dot(worldNormal.xyz, halfway)), SpecularPower);
 
-	//// LIGHT 2
+	//// TEAPOT LIGHT 2
 	float3 Light2Dir = normalize(TeapotLight2Pos - vOut.WorldPos.xyz);
 	float3 Light2Dist = length(TeapotLight2Pos - vOut.WorldPos.xyz);
 	float3 DiffuseLight2 = TeapotLight2Colour * saturate(dot(worldNormal.xyz, Light2Dir)) / Light2Dist;
@@ -302,18 +303,112 @@ float4 VertexLitDiffuseMap(VS_LIGHTING_OUTPUT vOut) : SV_Target  // The ": SV_Ta
 	float3 SpecularLight2 = DiffuseLight2 * pow(saturate(dot(worldNormal.xyz, halfway)), SpecularPower);
 
 
-	//// LIGHT 3
+	//// TEAPOT LIGHT 3
 	float3 Light3Dir = normalize(TeapotLight3Pos - vOut.WorldPos.xyz);   // Direction for each light is different
 	float3 Light3Dist = length(TeapotLight3Pos - vOut.WorldPos.xyz);
 	float3 DiffuseLight3 = TeapotLight3Colour * saturate(dot(worldNormal.xyz, Light1Dir)) / Light3Dist;
 	halfway = normalize(Light3Dir + CameraDir);
 	float3 SpecularLight3 = DiffuseLight3 * pow(saturate(dot(worldNormal.xyz, halfway)), SpecularPower);
 
-	// Sum the effect of the two lights - add the ambient at this stage rather than for each light (or we will get twice the ambient level)
-	float3 DiffuseLight = AmbientColour + DiffuseLight1 + DiffuseLight2 + DiffuseLight3;
-	float3 SpecularLight = SpecularLight1 + SpecularLight2 + SpecularLight3;
+	//// CUBE LIGHT
+	Light1Dir = normalize(CubeLightPos - vOut.WorldPos.xyz);   // Direction for each light is different
+	Light1Dist = length(CubeLightPos - vOut.WorldPos.xyz);
+	float3 CubeDiffuseLight = CubeLightColour * max(dot(worldNormal.xyz, Light1Dir), 0) / Light1Dist;
+	halfway = normalize(Light1Dir + CameraDir);
+	float3 CubeSpecularLight = CubeDiffuseLight * pow(max(dot(worldNormal.xyz, halfway), 0), SpecularPower);
+
+	//// CAR LIGHT
+	Light1Dir = normalize(CarLightPos - vOut.WorldPos.xyz);   // Direction for each light is different
+	Light1Dist = length(CarLightPos - vOut.WorldPos.xyz);
+	float3 CarDiffuseLight = CarLightColour * saturate(dot(worldNormal.xyz, Light1Dir)) / Light1Dist;
+	halfway = normalize(Light1Dir + CameraDir);
+	float3 CarSpecularLight = CarDiffuseLight * pow(saturate(dot(worldNormal.xyz, halfway)), SpecularPower);
+
+	//// SPOT LIGHT 1
+	// Slight adjustment to calculated depth of pixels so they don't shadow themselves
+	const float DepthAdjust = 0.0005f;
+
+	// Start with no light contribution from this light
+	float3 DiffuseSpotLight1 = 0;
+	float3 SpecularSpotLight1 = 0;
+
+	// Using the world position of the current pixel and the matrices of the light (as a camera), find the 2D position of the
+	// pixel *as seen from the light*. Will use this to find which part of the shadow map to look at.
+	// The usual view / projection matrix multiplies as we would see in a vertex shader (can improve performance by putting these lines in vertex shader)
+	float4 light1ViewPos = mul(float4(vOut.WorldPos), SpotLight1ViewMatrix);
+	float4 light1ProjPos = mul(light1ViewPos, SpotLight1ProjMatrix);
+
+	// Get direction from pixel to light
+	Light1Dir = normalize(SpotLight1Pos - vOut.WorldPos.xyz);
+
+	// Check if pixel is within light cone
+	if (dot(SpotLight1Facing, -Light1Dir) > SpotLight1CosHalfAngle) //**** This condition needs to be written as the first exercise to get spotlights working
+	{
+		// Convert 2D pixel position as viewed from light into texture coordinates for shadow map - an advanced topic related to the projection step
+		// Detail: 2D position x & y get perspective divide, then converted from range -1->1 to UV range 0->1. Also flip V axis
+		float2 shadowUV = 0.5f * light1ProjPos.xy / light1ProjPos.w + float2(0.5f, 0.5f);
+		shadowUV.y = 1.0f - shadowUV.y;
+
+		// Get depth of this pixel if it were visible from the light (another advanced projection step)
+		float depthFromLight = light1ProjPos.z / light1ProjPos.w - DepthAdjust; //*** Adjustment so polygons don't shadow themselves
+
+		// Compare pixel depth from light with depth held in shadow map of the light. If shadow map depth is less than something is nearer
+		// to the light than this pixel - so the pixel gets no effect from this light
+		if (depthFromLight < ShadowMap1.Sample(PointClamp, shadowUV).r)
+		{
+			// Remainder of standard per-pixel lighting code is unchanged
+			float3 light1Dist = length(SpotLight1Pos - vOut.WorldPos.xyz);
+			DiffuseSpotLight1 = SpotLight1Colour * max(dot(worldNormal.xyz, Light1Dir), 0) / light1Dist;
+			float3 halfway = normalize(Light1Dir + CameraDir);
+			SpecularSpotLight1 = DiffuseSpotLight1 * pow(max(dot(worldNormal.xyz, halfway), 0), SpecularPower);
+		}
+	}
 
 
+	//// SPOT LIGHT 2
+	float3 DiffuseSpotLight2 = 0;
+	float3 SpecularSpotLight2 = 0;
+
+	// Using the world position of the current pixel and the matrices of the light (as a camera), find the 2D position of the
+	// pixel *as seen from the light*. Will use this to find which part of the shadow map to look at.
+	// The usual view / projection matrix multiplies as we would see in a vertex shader (can improve performance by putting these lines in vertex shader)
+	float4 Light2ViewPos = mul(float4(vOut.WorldPos), SpotLight2ViewMatrix);
+	float4 Light2ProjPos = mul(Light2ViewPos, SpotLight2ProjMatrix);
+
+	// Get direction from pixel to light
+	Light2Dir = normalize(SpotLight2Pos - vOut.WorldPos.xyz);
+
+
+	// Check if pixel is within light cone
+	if (dot(SpotLight2Facing, -Light2Dir) > SpotLight2CosHalfAngle) //**** This condition needs to be written as the first exercise to get spotlights working
+	{
+		// Convert 2D pixel position as viewed from light into texture coordinates for shadow map - an advanced topic related to the projection step
+		// Detail: 2D position x & y get perspective divide, then converted from range -1->1 to UV range 0->1. Also flip V axis
+		float2 shadowUV = 0.5f * Light2ProjPos.xy / Light2ProjPos.w + float2(0.5f, 0.5f);
+		shadowUV.y = 1.0f - shadowUV.y;
+
+		// Get depth of this pixel if it were visible from the light (another advanced projection step)
+		float depthFromLight = Light2ProjPos.z / Light2ProjPos.w - DepthAdjust; //*** Adjustment so polygons don't shadow themselves
+
+		// Compare pixel depth from light with depth held in shadow map of the light. If shadow map depth is less than something is nearer
+		// to the light than this pixel - so the pixel gets no effect from this light
+		if (depthFromLight < ShadowMap2.Sample(PointClamp, shadowUV).r)
+		{
+			// Remainder of standard per-pixel lighting code is unchanged
+			float3 Light2Dist = length(SpotLight2Pos - vOut.WorldPos.xyz);
+			DiffuseSpotLight2 = SpotLight2Colour * max(dot(worldNormal.xyz, Light2Dir), 0) / Light2Dist;
+			float3 halfway = normalize(Light2Dir + CameraDir);
+			SpecularSpotLight2 = DiffuseSpotLight2 * pow(max(dot(worldNormal.xyz, halfway), 0), SpecularPower);
+		}
+	}
+
+	// Sum the effect of all lights - add the ambient at this stage rather than for each light (or we will get twice the ambient level)
+	/*float3 DiffuseLight = AmbientColour + DiffuseLight1 + CarDiffuseLight + TeapotDiffuseLight1 + TeapotDiffuseLight2 + TeapotDiffuseLight3 + DiffuseSpotLight1 + DiffuseSpotLight2;
+	float3 SpecularLight = SpecularLight1 + CarSpecularLight + TeapotSpecularLight1 + TeapotSpecularLight2 + TeapotSpecularLight3 + SpecularSpotLight1 + SpecularSpotLight2;*/
+
+	// Sum the effect of all lights - add the ambient at this stage rather than for each light (or we will get twice the ambient level)
+	float3 DiffuseLight = AmbientColour + DiffuseLight1 + DiffuseLight2 + DiffuseLight3 + DiffuseSpotLight1 + DiffuseSpotLight2 + CubeDiffuseLight + CarDiffuseLight;
+	float3 SpecularLight = SpecularLight1 + SpecularLight2 + SpecularLight3 + SpecularSpotLight1 + SpecularSpotLight2 + CubeSpecularLight + CarSpecularLight;
 	////////////////////
 	// Sample texture
 

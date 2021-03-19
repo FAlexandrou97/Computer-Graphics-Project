@@ -20,7 +20,7 @@ class CModel
 {
 /////////////////////////////
 // Private member variables
-private:
+protected:
 	//-----------------
 	// Postioning
 
