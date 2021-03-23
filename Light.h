@@ -10,6 +10,7 @@ private:
     float m_OrbitSpeed = 0.7f;
     int m_FSM = 1;
     float m_ConeAngle = 90.0f;
+    float m_CubeLightRotate = 0.0f;
     ID3D10EffectVectorVariable* m_FacingVar = NULL;
     ID3D10EffectMatrixVariable* m_ViewMatrixVar = NULL;
     ID3D10EffectMatrixVariable* m_ProjMatrixVar = NULL;
@@ -35,5 +36,6 @@ public:
     void CLight::SetProjMatrixVar(ID3D10EffectMatrixVariable* projMatrix);
     ID3D10EffectScalarVariable* CLight::GetConeAngleVar();
     void CLight::SetConeAngleVar(ID3D10EffectScalarVariable* coneAngleVar);
+    void CLight::OrbitAround(CModel* model, float frameTime);
 };
 

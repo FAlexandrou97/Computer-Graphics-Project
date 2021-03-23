@@ -171,3 +171,10 @@ void CLight::SetConeAngleVar(ID3D10EffectScalarVariable* coneAngleVar)
 	m_ConeAngleVar = coneAngleVar;
 }
 
+void CLight::OrbitAround(CModel* model, float frameTime)
+{
+	SetPosition(model->GetPosition() + D3DXVECTOR3(cos(m_CubeLightRotate) * GetOrbitRadius(), 5, sin(m_CubeLightRotate) * GetOrbitRadius()));
+	m_CubeLightRotate -= GetOrbitSpeed() * frameTime;
+}
+
+

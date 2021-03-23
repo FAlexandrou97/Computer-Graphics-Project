@@ -663,18 +663,14 @@ void UpdateScene( float frameTime )
 	g_pCubeWiggleVar->SetFloat(g_WiggleVar);
 
 	// Update the orbiting lights - a bit of a cheat with the static variable [ask the tutor if you want to know what this is]
-	static float CubeLightRotate = 0.0f;
-	CubeLight->SetPosition( Box->GetPosition() + D3DXVECTOR3(cos(CubeLightRotate)*CubeLight->GetOrbitRadius(), 5, sin(CubeLightRotate)*CubeLight->GetOrbitRadius()) );
-	CubeLightRotate -= CubeLight->GetOrbitSpeed() * frameTime;
+	CubeLight->OrbitAround(Box, frameTime);
 	CubeLight->UpdateMatrix();
 
-	static float CarLightRotate = 0.0f;
-	CarLight->SetPosition(Car->GetPosition() + D3DXVECTOR3(cos(CarLightRotate) * CarLight->GetOrbitRadius(), 5, sin(CarLightRotate) * CarLight->GetOrbitRadius()));
-	CarLightRotate -= CarLight->GetOrbitSpeed() * frameTime;
+	CarLight->OrbitAround(Car, frameTime);
 	CarLight->UpdateMatrix();
 
 	// Update teapot lights
-	const float colourUpdateSpeed = frameTime * 5;
+	const float colourUpdateSpeed = 5.0f * frameTime;
 
 	TeapotLights[0]->Pulsate(D3DXVECTOR3(0, 0, 0), D3DXVECTOR3(5.0f, 0.0f, 3.5f), colourUpdateSpeed);
 	TeapotLights[1]->ChangeColour(colourUpdateSpeed);
