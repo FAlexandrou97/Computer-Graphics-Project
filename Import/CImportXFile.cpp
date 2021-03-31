@@ -122,7 +122,9 @@ EImportError CImportXFile::ImportFile
 	}
 
 	// Split into meshes containing only one material each
-	SplitMeshes();
+	// Commented out as suggested by the lab, to load Matrix Hierarchy models
+	// Uncommenting this line will partialy render the Matrix Hierarchy models
+	//SplitMeshes();
 
 	// Mark file as loaded
 	m_bImported = true;
